@@ -14,6 +14,7 @@ library(daymetr)
 # NOTE - I'M USING THE DAYMETR PACKAGE, SPECIFICALLY DEVELOPED TO DOWNLOAD DAYMET DATA INTO R.
 # THIS RUNS THE RISK OF THE PACKAGE BECOMING OUTDATED THOUGH, MAYBE WE WANT TO SCRAPE DATA OFF DAYMET A DIFFERENT WAY.
 # WE WILL ALSO NEED TO MANUALLY CONVERT EVENT DATES INTO SEQUENTIAL YEAR DAYS (OR VICE-VERSA)
+# THIS PACKAGE ONLY ALLOWS YOU TO SPECIFY START AND END DATES ON THE YEAR LEVEL
 
 # Downloading Daymet data for a specified longitude/latitude and time period
 daymet_data <- download_daymet(lat = 36.0133,
@@ -44,4 +45,40 @@ daymet_data <- download_daymet_batch(file_location = 'sample_addresses.csv',
 assign(daymet_data[[1]]$site, data.frame(daymet_data[[1]]$data))
 
 
-# Let's try downloading Daymet data a different way, scraping it directly from the web
+# Let's try getting Daymet data a different way, downloading it directly from the web
+# Here's some documentation: https://daymet.ornl.gov/web_services#single
+# Loading necessary packages
+library(curl)
+library(tidyverse)
+library(janitor)
+
+# Setting a URL - this can be customized with Latitude, Longitude, Variables of Interest, Start Date, and End Date
+url <- 'https://daymet.ornl.gov/single-pixel/api/data?lat=35.9621&lon=-84.2916&vars=dayl,prcp,srad,swe,tmax,tmin,vp&start=2020-01-01&end=2020-01-01'
+
+# Downloading the file directly and saving to disk
+download.file(url, destfile = "Daymet Data.csv")
+# Importing this file back into R, only keeping the rows that I want
+daymet_data <- read_csv("Daymet Data.csv", skip = 7)
+
+# Alternatively, streaming the data directly into R
+# Opening a streaming connection
+connection <- curl(url)
+open(connection)
+# Streaming the data as text
+output <- readLines(connection)
+# Closing the streaming connection
+close(connection)
+# Pulling out the data of interest
+output_length <- length(output)
+data_string <- str_detect(output, "year,yday")
+data_position <- match(TRUE, data_string)
+tail_position <- output_length - data_position + 1
+daymet_data <- tail(output, tail_position)
+# Splitting the data strings
+daymet_data <- str_split(daymet_data, ",", simplify = TRUE)
+# Putting data into tibble
+daymet_data <- as_tibble(daymet_data)
+daymet_data <- row_to_names(daymet_data, row_number = 1)
+# Converting data to numeric
+daymet_data <- daymet_data |>
+  mutate_if(is.character, as.numeric)
