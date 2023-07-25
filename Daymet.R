@@ -143,5 +143,22 @@ daymet_data <- daymet_download(lat, lon, vars, start, end)
 # EVERYTHING ABOVE USES THE DAYMET API (FOR SINGLE PIXEL EXTRACTION).
 # IF IT IS COMPLIANT, THEN GREAT. IF IT IS NOT, THEN WE WILL NEED TO DOWNLOAD DAYMET DATA THAT SPANS CHICAGO (AND WHEREVER ELSE PATIENTS MIGHT BE).
 # WE COULD PROBABLY USE THE DAYMETR PACKAGE FOR THAT SINCE LOCATIONS AREN'T SPECIFIC, OR BUILD OUR OWN TOOL. AGAIN, DAYMETR WOULD BE DOWNLOADING DATA FOR AN ENTIRE YEAR AT MINIMUM.
-# THEN WE'D NEED TO EXTRACT DATA FROM THE NETCDF, AND LINK IN THE PATIENT LON/LAT COORDINATES TO THE DAYMET TILES.
+# THEN WE'D NEED TO EXTRACT DATA FROM THE NETCDF, AND LINK IN THE PATIENT LON/LAT COORDINATES TO THE DAYMET TILES, ALL INTERNALLY.
 #########
+download_daymet_ncss(location = c(36.61, -85.37, 33.57, -81.29),
+                     start = 1980,
+                     end = 1980,
+                     param = "tmin",
+                     silent = FALSE,
+                     path = "C:/Users/benba/Documents/Defusing Disasters/DeGAUSS/DeGAUSS")
+library(ncdf4)
+daymet_data <- nc_open("tmin_daily_1980_ncss.nc")
+attributes(daymet_data$var)
+attributes(daymet_data$dim)
+lat <- ncvar_get(daymet_data, "lat")
+lon <- ncvar_get(daymet_data, "lon")
+tmin <- ncvar_get(daymet_data, "tmin")
+dim(tmin) # Tmin for every lat/lon, and every day of the year
+tmin[1, 1, 1] # Tmin at first lat, first lon, first day of year
+CHECK NETCDF TUTORIAL FOR HOW TO BETTER FORMAT THESE. AND GRIDMET CODE HAS SOME STUFF.
+UNANSWERED QUESTION: HOW TO LINK A PATIENT LON/LAT TO A DAYMET LOCATION LON/LAT
