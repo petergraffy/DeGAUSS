@@ -11,6 +11,8 @@
 
 # Loading necessary packages
 library(daymetr)
+library(ncdf4)
+library(tidyverse)
 # NOTE - I'M USING THE DAYMETR PACKAGE, SPECIFICALLY DEVELOPED TO DOWNLOAD DAYMET DATA INTO R.
 # THIS RUNS THE RISK OF THE PACKAGE BECOMING OUTDATED THOUGH, MAYBE WE WANT TO SCRAPE DATA OFF DAYMET A DIFFERENT WAY.
 # WE WILL ALSO NEED TO MANUALLY CONVERT EVENT DATES INTO SEQUENTIAL YEAR DAYS (OR VICE-VERSA).
@@ -145,20 +147,71 @@ daymet_data <- daymet_download(lat, lon, vars, start, end)
 # WE COULD PROBABLY USE THE DAYMETR PACKAGE FOR THAT SINCE LOCATIONS AREN'T SPECIFIC, OR BUILD OUR OWN TOOL. AGAIN, DAYMETR WOULD BE DOWNLOADING DATA FOR AN ENTIRE YEAR AT MINIMUM.
 # THEN WE'D NEED TO EXTRACT DATA FROM THE NETCDF, AND LINK IN THE PATIENT LON/LAT COORDINATES TO THE DAYMET TILES, ALL INTERNALLY.
 #########
-download_daymet_ncss(location = c(36.61, -85.37, 33.57, -81.29),
-                     start = 1980,
-                     end = 1980,
-                     param = "tmin",
+# Trying the NetCDF route #
+# Reading in the patient address data
+sample_addresses <- read_csv("sample_addresses.csv")
+
+# Finding the min and max longitude and latitude out of all the patient address coordinates
+min_lon <- min(sample_addresses$lon)
+max_lon <- max(sample_addresses$lon)
+min_lat <- min(sample_addresses$lat)
+max_lat <- max(sample_addresses$lat)
+
+# In order to preserve patient privacy, adding a random amount of noise to the bounding box of patient addresses
+# Each bounding box point (e.g., maximum latitude) will be extended by an additional 1-22 kilometers
+noise <- runif(4, min = 0.01, max = 0.2)
+min_lon <- min_lon - noise[1]
+max_lon <- max_lon + noise[2]
+min_lat <- min_lat - noise[3]
+max_lat <- max_lat + noise[4]
+
+# Downloading the Daymet NetCDF data defined by the coordinate bounding box
+download_daymet_ncss(location = c(max_lat, min_lon, min_lat, max_lon), # Bounding box defined as top left / bottom right pair c(lat, lon, lat, lon)
+                     start = 2022,
+                     end = 2022,
+                     param = "tmax",
+                     mosaic = "na",
                      silent = FALSE,
-                     path = "C:/Users/benba/Documents/Defusing Disasters/DeGAUSS/DeGAUSS")
-library(ncdf4)
-daymet_data <- nc_open("tmin_daily_1980_ncss.nc")
+                     path = getwd())
+
+# Loading the NetCDF file downloaded from Daymet
+daymet_data <- nc_open("tmax_daily_2022_ncss.nc")
+
+# Checking the variables in the file
 attributes(daymet_data$var)
+# Checking the dimensions in the file
 attributes(daymet_data$dim)
+
+# Extracting latitude and longitude
 lat <- ncvar_get(daymet_data, "lat")
 lon <- ncvar_get(daymet_data, "lon")
-tmin <- ncvar_get(daymet_data, "tmin")
-dim(tmin) # Tmin for every lat/lon, and every day of the year
-tmin[1, 1, 1] # Tmin at first lat, first lon, first day of year
-CHECK NETCDF TUTORIAL FOR HOW TO BETTER FORMAT THESE. AND GRIDMET CODE HAS SOME STUFF.
+
+# Extracting time (365 sequential days since 1950-01-01 00:00:00)
+ncatt_get(daymet_data, "time")
+time <- ncvar_get(daymet_data, "time")
+
+# Extracting tmax as "matrix slices" (3rd dimension is time)
+tmax <- ncvar_get(daymet_data, "tmax")
+dim(tmax) # tmax for every lat/lon, and every day of the year
+# Replacing FillValues with NA
+fillvalue <- ncatt_get(daymet_data, "tmax", "_FillValue")
+fillvalue <- fillvalue$value
+tmax[tmax == fillvalue] <- NA
+
+# Converting time to calendar dates
+time <- as_date(time, origin = "1950-01-01")
+
+# Creating dataframe of coordinates, time, and tmax
+# Just doing first day for now
+lonlattime <- as.matrix(expand.grid(lon, lat, time[1])) # FIX THIS
+tmax_vector <- as.vector(tmax[, , 1])
+tmax_df <- data.frame(cbind(lonlattime, tmax_vector))
+tmax_df <- tmax_df |>
+  rename(longitude = Var1,
+         latitude = Var2,
+         date = Var3,
+         tmax = tmax_vector)
+
+PLOT THE ABOVE, CHANGE
+CONFIRM THAT ABOVE WORKS FOR LEAP YEARS
 UNANSWERED QUESTION: HOW TO LINK A PATIENT LON/LAT TO A DAYMET LOCATION LON/LAT
