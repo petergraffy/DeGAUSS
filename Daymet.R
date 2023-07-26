@@ -33,23 +33,28 @@ max_lat <- max_lat + noise[4]
 
 # Downloading the Daymet NetCDF data defined by the coordinate bounding box
 # This procedure extracts the bounding box from the patient coordinates + noise, but we'll also want to add an option that lets the user specify their own bounding box
-download_daymet_ncss(location = c(max_lat, min_lon, min_lat, max_lon), # Bounding box defined as top left / bottom right pair c(lat, lon, lat, lon)
-                     start = 2020,
-                     end = 2020,
-                     param = "tmax",
-                     frequency = "daily",
-                     mosaic = "na",
-                     silent = FALSE,
-                     force = TRUE,
-                     path = getwd())
+year_start <- 2020
+year_end <- 2021
+daymet_variables <- "tmax,tmin" # Comma-separated string of Daymet variables: tmax,tmin,srad,vp,swe,prcp,dayl
+daymet_variables <- str_remove(daymet_variables, " ")
+daymet_variables <- str_split(daymet_variables, ",", simplify = TRUE)
+for (variable in daymet_variables){
+  download_daymet_ncss(location = c(max_lat, min_lon, min_lat, max_lon), # Bounding box defined as top left / bottom right pair c(lat, lon, lat, lon)
+                       start = year_start,
+                       end = year_end,
+                       param = variable,
+                       frequency = "daily",
+                       mosaic = "na",
+                       silent = FALSE,
+                       force = TRUE,
+                       path = getwd())
+}
 
+# WILL NEED TO BUILD THIS OUT SO IT LOOPS THROUGH A SEQUENCE FROM YEAR_START TO YEAR_END
+# WITHIN EACH YEAR LOOP, WILL NEED A NESTED LOOP THAT WORKS THROUGH EACH REQUESTED DAYMET VARIABLE
+year_sequence <- year_start:year_end
 # Loading the NetCDF file downloaded from Daymet
-daymet_data <- nc_open("tmax_daily_2020_ncss.nc")
-
-# Checking the variables in the file
-attributes(daymet_data$var)
-# Checking the dimensions in the file
-attributes(daymet_data$dim)
+daymet_data <- nc_open("tmax_daily_2021_ncss.nc")
 
 # Extracting latitude and longitude
 lat <- ncvar_get(daymet_data, "lat")
@@ -79,40 +84,41 @@ selected <- as.numeric(rownames(dif))
 lon <- lon[, selected]
 
 # Extracting time (365 sequential days since 1950-01-01 00:00:00)
-ncatt_get(daymet_data, "time")
+time_units <- ncatt_get(daymet_data, "time")$units
+time_units <- str_extract(time_units, "[0-9]{4}-[0-9]{2}-[0-9]{2}")
 time <- ncvar_get(daymet_data, "time")
 
-# Extracting tmax as "matrix slices" (3rd dimension is time)
-tmax <- ncvar_get(daymet_data, "tmax")
-dim(tmax) # tmax for every lat/lon, and every day of the year
+# Extracting the Daymet variable as "matrix slices" (3rd dimension is time)
+daymet_variable <- ncvar_get(daymet_data, "tmax")
 # Replacing FillValues with NA
 fillvalue <- ncatt_get(daymet_data, "tmax", "_FillValue")
 fillvalue <- fillvalue$value
-tmax[tmax == fillvalue] <- NA
+daymet_variable[daymet_variable == fillvalue] <- NA
 
 # Converting time to calendar dates
-time <- as_date(time, origin = "1950-01-01")
+time <- as_date(time, origin = time_units)
 
-# Creating dataframe of coordinates, time, and tmax
+# Creating dataframe of coordinates, time, and the Daymet variable
 # Just doing first day for now
 lonlattime <- as.matrix(expand.grid(lon, lat, time[1]))
-tmax_vector <- as.vector(tmax[, , 1])
-tmax_df <- data.frame(cbind(lonlattime, tmax_vector))
-tmax_df <- tmax_df %>%
+daymet_variable_vector <- as.vector(daymet_variable[, , 1])
+daymet_variable_df <- data.frame(cbind(lonlattime, daymet_variable_vector))
+daymet_variable_df <- daymet_variable_df %>%
   rename(longitude = Var1,
          latitude = Var2,
          date = Var3,
-         tmax = tmax_vector) %>%
+         tmax = daymet_variable_vector) %>%
   mutate_at(c('longitude', 'latitude', 'tmax'), as.numeric)  %>%
   mutate_at('date', as_date)
 
 # Plotting the data
-ggplot(tmax_df, aes(x = longitude, y = latitude, fill = tmax)) +
+ggplot(daymet_variable_df, aes(x = longitude, y = latitude, fill = tmax)) +
   geom_tile() +
   scale_fill_gradientn(colours = c("#010891", "#3ce4f0", "#f0f037", "#e0901f", "#910401"))
+# AT THE END OF PROCESSING, DELETE THE NETCDF FILE THAT WAS JUST WORKED THROUGH FROM R MEMORY AND DISK
 
-
-NEXT STEP: LINK THE VARIABLE MATCHED WITH YEAR INTO THE COORDS (ONLY HAVE TO EXTRACT COORDS ONCE)
+NEXT STEP: LINK THE VARIABLE MATCHED WITH DATE INTO THE COORDS (ONLY HAVE TO EXTRACT COORDS ONCE)
 NEXT NEXT STEP: CREATE A SELECTOR SO I CAN PICK OUT WHAT DATE OF DATA I WANT
-NEXT NEXT NEXT STEP: PULL IN TMIN AND TMAX
-UNANSWERED QUESTION: HOW TO LINK A PATIENT LON/LAT TO A DAYMET LOCATION LON/LAT
+NEXT NEXT NEXT STEP: MATCH THE DAYMET LOCATION LON/LAT TO THE PATIENT LON/LAT
+NEXT NEXT NEXT NEXT STEP: CREATE MULTIPLE VARIABLES LOOP
+NEXT NEXT NEXT NEXT NEXT STEP: CREATE MULTIPLE YEARS LOOP
