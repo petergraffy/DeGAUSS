@@ -13,6 +13,7 @@
 library(daymetr)
 library(ncdf4)
 library(tidyverse)
+library(glue)
 
 # Reading in the patient address data
 sample_addresses <- read_csv("sample_addresses.csv")
@@ -31,10 +32,10 @@ max_lon <- max_lon + noise[2]
 min_lat <- min_lat - noise[3]
 max_lat <- max_lat + noise[4]
 
-# Downloading the Daymet NetCDF data defined by the coordinate bounding box
+# Downloading the Daymet NetCDF data defined by the coordinate bounding box: One file per variable per year
 # This procedure extracts the bounding box from the patient coordinates + noise, but we'll also want to add an option that lets the user specify their own bounding box
-year_start <- 2020
-year_end <- 2021
+year_start <- 2020 # Start year of Daymet NetCDF data download
+year_end <- 2021 # End year of Daymet NetCDF data download
 daymet_variables <- "tmax,tmin" # Comma-separated string of Daymet variables: tmax,tmin,srad,vp,swe,prcp,dayl
 daymet_variables <- str_remove(daymet_variables, " ")
 daymet_variables <- str_split(daymet_variables, ",", simplify = TRUE)
@@ -53,8 +54,12 @@ for (variable in daymet_variables){
 # WILL NEED TO BUILD THIS OUT SO IT LOOPS THROUGH A SEQUENCE FROM YEAR_START TO YEAR_END
 # WITHIN EACH YEAR LOOP, WILL NEED A NESTED LOOP THAT WORKS THROUGH EACH REQUESTED DAYMET VARIABLE
 year_sequence <- year_start:year_end
+yr <- year_sequence[1] # INCREMENT THIS IN LOOP
+dm_var <- daymet_variables[1] # INCREMENT THIS IN LOOP
+
 # Loading the NetCDF file downloaded from Daymet
-daymet_data <- nc_open("tmax_daily_2021_ncss.nc")
+file_name <- glue(dm_var, "_daily_", yr, "_ncss.nc")
+daymet_data <- nc_open(file_name)
 
 # Extracting latitude and longitude
 lat <- ncvar_get(daymet_data, "lat")
@@ -89,36 +94,61 @@ time_units <- str_extract(time_units, "[0-9]{4}-[0-9]{2}-[0-9]{2}")
 time <- ncvar_get(daymet_data, "time")
 
 # Extracting the Daymet variable as "matrix slices" (3rd dimension is time)
-daymet_variable <- ncvar_get(daymet_data, "tmax")
+daymet_variable <- ncvar_get(daymet_data, dm_var)
 # Replacing FillValues with NA
-fillvalue <- ncatt_get(daymet_data, "tmax", "_FillValue")
+fillvalue <- ncatt_get(daymet_data, dm_var, "_FillValue")
 fillvalue <- fillvalue$value
 daymet_variable[daymet_variable == fillvalue] <- NA
 
 # Converting time to calendar dates
 time <- as_date(time, origin = time_units)
 
-# Creating dataframe of coordinates, time, and the Daymet variable
-# Just doing first day for now
-lonlattime <- as.matrix(expand.grid(lon, lat, time[1]))
-daymet_variable_vector <- as.vector(daymet_variable[, , 1])
-daymet_variable_df <- data.frame(cbind(lonlattime, daymet_variable_vector))
+# Creating dataframe of Daymet coordinates and the Daymet variable by all dates
+coords <- as.matrix(expand.grid(lon, lat))
+daymet_variable_df <- as.data.frame(coords)
 daymet_variable_df <- daymet_variable_df %>%
   rename(longitude = Var1,
-         latitude = Var2,
-         date = Var3,
-         tmax = daymet_variable_vector) %>%
-  mutate_at(c('longitude', 'latitude', 'tmax'), as.numeric)  %>%
-  mutate_at('date', as_date)
+         latitude = Var2)
+for (date_index in 1:length(time)){
+  # Extracting the date name
+  date_name <- as.character(time[date_index])
+  # Extracting the relevant Daymet data for the date
+  daymet_variable_vector <- as.vector(daymet_variable[, , date_index])
+  # Combining the Daymet coordinates and Daymet data
+  daymet_variable_name <- glue(dm_var, "_", date_name)
+  daymet_variable_df <- daymet_variable_df %>%
+    add_column(!!daymet_variable_name := daymet_variable_vector)
+}
+daymet_variable_df <- daymet_variable_df %>%
+  mutate(across(where(is.character), as.numeric))
 
-# Plotting the data
-ggplot(daymet_variable_df, aes(x = longitude, y = latitude, fill = tmax)) +
+# Creating function to pull out the Daymet data for a specified date
+daymet_select <- function(date_var, dm_var, daymet_variable_df){
+  # Taking care of leap years, per Daymet conventions (12/31 is switched to 12/30)
+  date_var <- as_date(date_var)
+  if (leap_year(date_var) & month(date_var) == 12 & day(date_var) == 31){
+    date_var <- date_var - 1
+  }
+  date_var <- as.character(date_var)
+  # Selecting the coordinates and Daymet data for the specified date
+  daymet_variable_search <- glue(dm_var, "_", date_var)
+  daymet_variable_df_select <- daymet_variable_df %>%
+    select(longitude, latitude, !!daymet_variable_search)
+}
+date_var <- "2020-01-01" # Specified date
+daymet_variable_df_select <- daymet_select(date_var, dm_var, daymet_variable_df)
+
+# Run Daymet_delete.R to delete the NetCDF files that were downloaded from disk
+
+# Plotting the data - CAN REMOVE THIS EVENTUALLY, JUST USED FOR TESTING
+daymet_variable_name <- names(daymet_variable_df_select)[3]
+ggplot(daymet_variable_df_select, aes(x = longitude, y = latitude, fill = get(daymet_variable_name))) +
   geom_tile() +
-  scale_fill_gradientn(colours = c("#010891", "#3ce4f0", "#f0f037", "#e0901f", "#910401"))
-# AT THE END OF PROCESSING, DELETE THE NETCDF FILE THAT WAS JUST WORKED THROUGH FROM R MEMORY AND DISK
+  scale_fill_gradientn(colours = c("#010891", "#3ce4f0", "#f0f037", "#e0901f", "#910401"), name = "")
 
-NEXT STEP: LINK THE VARIABLE MATCHED WITH DATE INTO THE COORDS (ONLY HAVE TO EXTRACT COORDS ONCE)
-NEXT NEXT STEP: CREATE A SELECTOR SO I CAN PICK OUT WHAT DATE OF DATA I WANT
-NEXT NEXT NEXT STEP: MATCH THE DAYMET LOCATION LON/LAT TO THE PATIENT LON/LAT
-NEXT NEXT NEXT NEXT STEP: CREATE MULTIPLE VARIABLES LOOP
-NEXT NEXT NEXT NEXT NEXT STEP: CREATE MULTIPLE YEARS LOOP
+# NEXT STEPS:
+# - MATCH THE DAYMET LOCATION LON/LAT TO THE PATIENT LON/LAT
+# - CREATE MULTIPLE VARIABLES LOOP
+# - CREATE MULTIPLE YEARS LOOP
+# - BUILD OUT THE EVENT DATE DETECTOR (EVENT DATES TO LIST, EXPAND WITH SPECIFIED LAG, SORT AND REMOVE DUPLICATES, POP FROM LIST IF DATE IN YEAR)
+# - ADD IN CODE FOR EXTRA OPTIONS (DAYMETR OPTIONS, BOUNDING BOX OPTIONS)
