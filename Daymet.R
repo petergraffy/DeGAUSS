@@ -1,3 +1,10 @@
+# Specifying user-customized options
+csv_filename <- "sample_addresses.csv" # Input CSV file, containing columns of ID variable, lat, lon, and optionally event dates
+year_start <- 2020 # Start year of Daymet NetCDF data download
+year_end <- 2021 # End year of Daymet NetCDF data download
+daymet_variables <- "tmax,tmin" # Comma-separated string of Daymet variables: tmax,tmin,srad,vp,swe,prcp,dayl
+#### DO NOT CHANGE ANYTHING AFTER THIS ####
+
 # Daymet weather variables include daily minimum and maximum temperature, precipitation,
 # vapor pressure, shortwave radiation, snow water equivalent, and day length produced on
 # a 1 km x 1 km gridded surface over continental North America and Hawaii from 1980 and
@@ -52,7 +59,7 @@ daymet_select <- function(id_var, date_var, .time_dict = time_dict, .daymet_data
 }
 
 # Reading in the patient address data
-addresses <- read_csv("sample_addresses.csv")
+addresses <- read_csv(csv_filename)
 
 # Creating a main dataset to contain all linked Daymet data - these will all be merged on the first column (the ID column)
 main_dataset <- addresses %>%
@@ -77,9 +84,6 @@ max_lat <- max_lat + noise[4]
 
 # Downloading the Daymet NetCDF data defined by the coordinate bounding box: One file per variable per year
 # This procedure extracts the bounding box from the patient coordinates + noise, but we'll also want to add an option that lets the user specify their own bounding box
-year_start <- 2020 # Start year of Daymet NetCDF data download
-year_end <- 2021 # End year of Daymet NetCDF data download
-daymet_variables <- "tmax,tmin" # Comma-separated string of Daymet variables: tmax,tmin,srad,vp,swe,prcp,dayl
 daymet_variables <- str_remove(daymet_variables, " ")
 daymet_variables <- str_split(daymet_variables, ",", simplify = TRUE)
 for (variable in daymet_variables) {
@@ -94,21 +98,34 @@ for (variable in daymet_variables) {
                        path = getwd())
 }
 
-# WILL NEED TO BUILD THIS OUT SO IT LOOPS THROUGH A SEQUENCE FROM YEAR_START TO YEAR_END
-# WITHIN EACH YEAR LOOP, WILL NEED A NESTED LOOP THAT WORKS THROUGH EACH REQUESTED DAYMET VARIABLE
-year_sequence <- year_start:year_end
-yr <- year_sequence[1] # INCREMENT THIS IN LOOP
-dm_var <- daymet_variables[1] # INCREMENT THIS IN LOOP
-
-# Creating a dictionary to link numbers 1–365 to a date in a year
+# Loading the NetCDF files downloaded from Daymet as a SpatRaster raster stack
+netcdf_list <- list.files(pattern = "_ncss.nc$")
 time_dict <- tibble(number = 1:365)
-origin <- as_date(paste0(yr, "-01-01")) - 1 # Numbers count days since origin
-time_dict <- time_dict %>%
-  mutate(date = as_date(number, origin = origin))
-
-# Loading the NetCDF file downloaded from Daymet as a SpatRaster
-file_name <- paste0(dm_var, "_daily_", yr, "_ncss.nc")
-daymet_data <- rast(file_name)
+layer_dict_colnames <- c("dm_var", "yr", "multiplier")
+layer_dict <- as_tibble(matrix(nrow = length(netcdf_list), ncol = length(layer_dict_colnames)), .name_repair = ~ layer_dict_colnames)
+for (i in 1:length(netcdf_list)) {
+  daymet_load <- rast(netcdf_list[i])
+  # Extracting the year and Daymet variable from the file loaded in
+  yr <- str_extract(netcdf_list[i], "[0-9]{4}")
+  dm_var <- unlist(str_split(netcdf_list[i], "_"))[1]
+  # Creating a dictionary to link numbers 1–365 to a date in a year
+  origin <- as_date(paste0(yr, "-01-01")) - 1 # Numbers count days since origin
+  new_date_col <- paste0("date_", yr)
+  if (!new_date_col %in% colnames(time_dict)) {
+    time_dict <- time_dict %>%
+      mutate(!!new_date_col := as_date(number, origin = origin))
+  }
+  # Creating a dictionary to assign a multiplier for identifying different layers in the raster stack
+  layer_dict$dm_var[i] <- dm_var
+  layer_dict$yr[i] <- yr
+  layer_dict$multiplier[i] <- i - 1
+  # Stacking the Daymet data rasters
+  if (i == 1) {
+    daymet_data <- daymet_load
+  } else {
+    daymet_data <- c(daymet_data, daymet_load)
+  }
+}
 
 # Changing the coordinate reference system of the patient addresses so they match that of Daymet
 new_crs <- crs(daymet_data, proj = TRUE)
@@ -119,10 +136,9 @@ id_var <- "patid1" # Specified patient
 date_var <- "2020-01-01" # Specified date
 main_dataset <- daymet_select(id_var, date_var)
 
-# Run Daymet_delete.R to delete the NetCDF files that were downloaded from disk
+# Run Daymet_delete.R to delete the NetCDF files that were downloaded from disk.
 
 # NEXT STEPS:
-# - CREATE MULTIPLE VARIABLES LOOP
-# - CREATE MULTIPLE YEARS LOOP
-# - BUILD OUT THE EVENT DATE DETECTOR (EVENT DATES TO LIST, EXPAND WITH SPECIFIED LAG, SORT AND REMOVE DUPLICATES, SELECT FROM LIST IF DATE IN YEAR)
-# - ADD IN CODE FOR EXTRA OPTIONS (DAYMETR OPTIONS, BOUNDING BOX OPTIONS)
+# - FIX FUNCTION ABOVE TO ACCOUNT FOR MULTIPLE DAYMET VARIABLES AND YEARS (USE MULTIPLIER LAYER_DICT FOR LAYER ID)
+# - BUILD OUT THE EVENT DATE DETECTOR (EVENT DATES TO LIST, EXPAND WITH SPECIFIED LAG, SORT AND REMOVE DUPLICATES, SELECT FROM LIST IN ORDER AND PULL RELEVANT LAYERS FROM RASTER STACK)
+# - ADD IN CODE FOR EXTRA OPTIONS (DAYMETR OPTIONS, BOUNDING BOX OPTIONS, SPECIFY EVENT DATES OR JUST INCLUDE ALL BETWEEN SPECIFIED YEAR START AND YEAR END)
