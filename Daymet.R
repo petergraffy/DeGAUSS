@@ -24,39 +24,48 @@ library(terra)
 # Writing functions
 # Creating function to link the Daymet data coordinates to the patient address coordinates for a specified patient and specified date
 daymet_select <- function(id_var, date_var, .time_dict = time_dict, .daymet_data = daymet_data, .proj_coords = proj_coords, .dm_var = dm_var, .main_dataset = main_dataset) {
-  # Taking care of leap years, per Daymet conventions (12/31 is switched to 12/30)
-  date_var <- as_date(date_var)
-  if (leap_year(date_var) & month(date_var) == 12 & day(date_var) == 31) {
-    date_var <- date_var - 1
-  }
-  # Looking up the number for the specified date in the time dictionary
-  date_num <- .time_dict %>%
-    filter(date == date_var) %>%
-    select(number) %>%
-    pull
-  # Extracting the Daymet data for the specified patient and specified date
-  daymet_linked <- terra::extract(subset(.daymet_data, date_num),
-                                  subset(.proj_coords, .proj_coords[[names(.proj_coords)]] == id_var),
-                                  bind = TRUE)
-  daymet_variable_df <- as.data.frame(daymet_linked)
-  # Renaming the Daymet data that was just added with the specified date
-  date_name <- .time_dict %>%
-    filter(number == date_num) %>%
-    select(date) %>%
-    pull
-  daymet_variable_name <- paste0(.dm_var, "_", date_name)
-  rename_variable_name <- daymet_variable_df %>%
-    select(last_col()) %>%
-    names()
-  daymet_variable_df <- daymet_variable_df %>%
-    rename(!!daymet_variable_name := !!rename_variable_name)
-  # Linking the Daymet data into the main dataset
-  if (daymet_variable_name %in% colnames(.main_dataset)) {
-    .main_dataset <- rows_update(.main_dataset, daymet_variable_df)
-  } else {
-    .main_dataset <- full_join(.main_dataset, daymet_variable_df)
-  }
 }
+# Taking care of leap years, per Daymet conventions (12/31 is switched to 12/30)
+date_var <- as_date(date_var)
+if (leap_year(date_var) & month(date_var) == 12 & day(date_var) == 31) {
+  date_var <- date_var - 1
+}
+# Looking up the number for the specified date in the time dictionary
+time_dict_col <- paste0("date_", year(date_var))
+date_num <- .time_dict %>%
+  filter(get(time_dict_col) == date_var) %>%
+  select(number) %>%
+  pull
+# Extracting the Daymet data for the specified patient and specified date
+# LEFT OFF HERE. GIVEN THE SPECIFIED DATE, PULL THE YEAR AND FIND THE OBS AND MULTIPLIERS IN LAYER_DICT. THEN LOOP THROUGH THEM.
+date_num <- date_num + (365 * multiplier)
+daymet_linked <- terra::extract(subset(.daymet_data, date_num),
+                                subset(.proj_coords, .proj_coords[[names(.proj_coords)]] == id_var),
+                                bind = TRUE)
+daymet_variable_df <- as.data.frame(daymet_linked)
+# Renaming the Daymet data that was just added with the specified date
+date_name <- .time_dict %>%
+  filter(number == date_num) %>%
+  select(date) %>%
+  pull
+daymet_variable_name <- paste0(.dm_var, "_", date_name)
+rename_variable_name <- daymet_variable_df %>%
+  select(last_col()) %>%
+  names()
+daymet_variable_df <- daymet_variable_df %>%
+  rename(!!daymet_variable_name := !!rename_variable_name)
+# Linking the Daymet data into the main dataset
+if (daymet_variable_name %in% colnames(.main_dataset)) {
+  .main_dataset <- rows_update(.main_dataset, daymet_variable_df)
+} else {
+  .main_dataset <- full_join(.main_dataset, daymet_variable_df)
+}
+
+
+
+
+
+
 
 # Reading in the patient address data
 addresses <- read_csv(csv_filename)
