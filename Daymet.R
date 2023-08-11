@@ -1,5 +1,5 @@
 # Specifying user-customized options
-csv_filename <- "sample_addresses_dates.csv" # Input CSV file, containing columns of ID variable, lat, lon, and optionally event dates
+csv_filename <- "sample_addresses.csv" # Input CSV file, containing columns of ID variable, lat, lon, and optionally event dates
 year_start <- 2020 # Start year of Daymet NetCDF data download
 year_end <- 2021 # End year of Daymet NetCDF data download
 daymet_variables <- "tmax,tmin" # Comma-separated string of Daymet variables: tmax,tmin,srad,vp,swe,prcp,dayl
@@ -21,6 +21,7 @@ library(daymetr)
 library(tidyverse)
 library(terra)
 library(gtools)
+library(data.table)
 
 # Writing functions
 # Creating function to link the Daymet data coordinates to the patient address coordinates for a specified patient and specified date
@@ -33,6 +34,7 @@ daymet_select <- function(id_var, date_var, .template = template, .id = id, .tim
     date_var <- date_var - 1
   }
   # Filling in the data to append with the ID and date
+  id_var <- as.character(id_var)
   to_append <- to_append %>%
     mutate(!!.id := !!id_var,
            date := !!date_var)
@@ -63,8 +65,16 @@ daymet_select <- function(id_var, date_var, .template = template, .id = id, .tim
       rename(!!dm_var := !!rename_variable_name)
     to_append <- rows_update(to_append, daymet_variable_df)
   }
+  # Setting initial column types of the main dataset
+  if (nrow(.main_dataset) == 0) {
+    col_types <- sapply(to_append, class)
+    col_types <- as.data.frame(col_types) %>%
+      rownames_to_column("var")
+    type_conversions <- Map(function(v, t) get(paste0("as.", t))(.main_dataset[[v]]), col_types$var, col_types$col_types)
+    .main_dataset <- setDT(data.frame(type_conversions, stringsAsFactors = FALSE))
+  }
   # Appending the Daymet data into the main dataset
-  .main_dataset <- rbind(.main_dataset, to_append)
+  .main_dataset <- rbindlist(list(.main_dataset, to_append))
   return(.main_dataset)
 }
 
@@ -109,9 +119,10 @@ for (variable in daymet_variables) {
                        path = getwd())
   main_dataset_colnames[[length(main_dataset_colnames) + 1]] <- variable
 }
-main_dataset <- as_tibble(matrix(nrow = 0, ncol = length(main_dataset_colnames)), .name_repair = ~ main_dataset_colnames)
+main_dataset <- as.data.table(matrix(nrow = 0, ncol = length(main_dataset_colnames)))
+colnames(main_dataset) <- main_dataset_colnames
 template <- main_dataset
-template[1, ] <- NA
+template <- rbindlist(list(template, list(NA)), fill = TRUE)
 template <- template %>%
   mutate_if(is.logical, as.numeric)
 
@@ -150,10 +161,10 @@ proj_coords <- project(coords, new_crs)
 
 # Linking the Daymet data coordinates to the patient address coordinates for a specified patient and specified date
 id_var <- "patid1" # Specified patient
-date_var <- "2020-01-01" # Specified date
+date_var <- "2021-01-01" # Specified date
 main_dataset <- daymet_select(id_var, date_var)
 
-# Sorting and de-duplicating the final results (don't expect duplicates, but doesn't hurt to check)
+# Sorting and de-duplicating the final results (duplicates could have resulted from leap years)
 main_dataset <- main_dataset %>%
   mutate(sort1 = factor(get(id), ordered = TRUE, levels = unique(mixedsort(get(id)))),
          sort2 = factor(date, ordered = TRUE, levels = unique(mixedsort(date)))) %>%
@@ -165,7 +176,9 @@ main_dataset <- main_dataset %>%
 csv_out <- paste0(unlist(str_split(csv_filename, ".csv"))[1], "_daymet", ".csv")
 write_csv(main_dataset, csv_out)
 
-# Run Daymet_delete.R to delete the NetCDF files that were downloaded from disk.
+# Deleting the NetCDF files that were downloaded from disk
+rm(list = ls(all.names = TRUE))
+unlink(list.files(pattern = "_ncss.nc$"), force = TRUE)
 
 # NEXT STEPS:
 # - BUILD OUT THE EVENT DATE DETECTOR (EVENT DATES TO LIST, EXPAND WITH SPECIFIED LAG, SORT AND REMOVE DUPLICATES, SELECT FROM LIST IN ORDER AND PULL RELEVANT LAYERS FROM RASTER STACK)
