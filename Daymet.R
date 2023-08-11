@@ -20,15 +20,22 @@ daymet_variables <- "tmax,tmin" # Comma-separated string of Daymet variables: tm
 library(daymetr)
 library(tidyverse)
 library(terra)
+library(gtools)
 
 # Writing functions
 # Creating function to link the Daymet data coordinates to the patient address coordinates for a specified patient and specified date
-daymet_select <- function(id_var, date_var, .time_dict = time_dict, .layer_dict = layer_dict, .daymet_data = daymet_data, .proj_coords = proj_coords, .main_dataset = main_dataset) {
+daymet_select <- function(id_var, date_var, .template = template, .id = id, .time_dict = time_dict, .layer_dict = layer_dict, .daymet_data = daymet_data, .proj_coords = proj_coords, .main_dataset = main_dataset) {
+  # Resetting the data to append with the main dataset template
+  to_append <- .template
   # Taking care of leap years, per Daymet conventions (12/31 is switched to 12/30)
   date_var <- as_date(date_var)
   if (leap_year(date_var) & month(date_var) == 12 & day(date_var) == 31) {
     date_var <- date_var - 1
   }
+  # Filling in the data to append with the ID and date
+  to_append <- to_append %>%
+    mutate(!!.id := !!id_var,
+           date := !!date_var)
   # Looking up the number for the specified date in the time dictionary
   time_dict_col <- paste0("date_", year(date_var))
   date_num <- .time_dict %>%
@@ -50,33 +57,19 @@ daymet_select <- function(id_var, date_var, .time_dict = time_dict, .layer_dict 
                                     subset(.proj_coords, .proj_coords[[names(.proj_coords)]] == id_var),
                                     bind = TRUE)
     daymet_variable_df <- as.data.frame(daymet_linked)
-    # Renaming the Daymet data that was just added with the specified date
-    date_name <- .time_dict %>%
-      filter(number == date_num) %>%
-      select(!!time_dict_col) %>%
-      pull
-    daymet_variable_name <- paste0(dm_var, "_", date_name)
-    rename_variable_name <- daymet_variable_df %>%
-      select(last_col()) %>%
-      names()
+    # Renaming the Daymet data that was just added and joining it to the data to append
+    rename_variable_name <- paste0(dm_var, "_", date_num)
     daymet_variable_df <- daymet_variable_df %>%
-      rename(!!daymet_variable_name := !!rename_variable_name)
-    # Linking the Daymet data into the main dataset
-    if (daymet_variable_name %in% colnames(.main_dataset)) {
-      .main_dataset <- rows_update(.main_dataset, daymet_variable_df)
-    } else {
-      .main_dataset <- full_join(.main_dataset, daymet_variable_df)
-    }
+      rename(!!dm_var := !!rename_variable_name)
+    to_append <- rows_update(to_append, daymet_variable_df)
   }
+  # Appending the Daymet data into the main dataset
+  .main_dataset <- rbind(.main_dataset, to_append)
   return(.main_dataset)
 }
 
 # Reading in the patient address data
 addresses <- read_csv(csv_filename)
-
-# Creating a main dataset to contain all linked Daymet data - these will all be merged on the first column (the ID column)
-main_dataset <- addresses %>%
-  select(1)
 
 # Converting the patient addresses to a SpatVector
 coords <- vect(addresses, geom = c("lon", "lat"), crs = "+proj=longlat +ellips=WGS84")
@@ -97,6 +90,11 @@ max_lat <- max_lat + noise[4]
 
 # Downloading the Daymet NetCDF data defined by the coordinate bounding box: One file per variable per year
 # This procedure extracts the bounding box from the patient coordinates + noise, but we'll also want to add an option that lets the user specify their own bounding box
+# Additionally creating a main dataset to contain all linked Daymet data - new observations will all be appended (vertical dataset)
+id <- addresses %>%
+  select(1) %>%
+  colnames()
+main_dataset_colnames <- c(id, "date")
 daymet_variables <- str_remove(daymet_variables, " ")
 daymet_variables <- str_split(daymet_variables, ",", simplify = TRUE)
 for (variable in daymet_variables) {
@@ -109,7 +107,13 @@ for (variable in daymet_variables) {
                        silent = FALSE,
                        force = TRUE,
                        path = getwd())
+  main_dataset_colnames[[length(main_dataset_colnames) + 1]] <- variable
 }
+main_dataset <- as_tibble(matrix(nrow = 0, ncol = length(main_dataset_colnames)), .name_repair = ~ main_dataset_colnames)
+template <- main_dataset
+template[1, ] <- NA
+template <- template %>%
+  mutate_if(is.logical, as.numeric)
 
 # Loading the NetCDF files downloaded from Daymet as a SpatRaster raster stack
 netcdf_list <- list.files(pattern = "_ncss.nc$")
@@ -149,8 +153,21 @@ id_var <- "patid1" # Specified patient
 date_var <- "2020-01-01" # Specified date
 main_dataset <- daymet_select(id_var, date_var)
 
+# Sorting and de-duplicating the final results (don't expect duplicates, but doesn't hurt to check)
+main_dataset <- main_dataset %>%
+  mutate(sort1 = factor(get(id), ordered = TRUE, levels = unique(mixedsort(get(id)))),
+         sort2 = factor(date, ordered = TRUE, levels = unique(mixedsort(date)))) %>%
+  arrange(sort1, sort2) %>%
+  select(-c(sort1, sort2)) %>%
+  distinct()
+
+# Writing the results out as a CSV file
+csv_out <- paste0(unlist(str_split(csv_filename, ".csv"))[1], "_daymet", ".csv")
+write_csv(main_dataset, csv_out)
+
 # Run Daymet_delete.R to delete the NetCDF files that were downloaded from disk.
 
 # NEXT STEPS:
 # - BUILD OUT THE EVENT DATE DETECTOR (EVENT DATES TO LIST, EXPAND WITH SPECIFIED LAG, SORT AND REMOVE DUPLICATES, SELECT FROM LIST IN ORDER AND PULL RELEVANT LAYERS FROM RASTER STACK)
+# -- SEPARATE THE EVENT DATES OR FILLED DATES FROM THE COORDINATES
 # - ADD IN CODE FOR EXTRA OPTIONS (DAYMETR OPTIONS, BOUNDING BOX OPTIONS, SPECIFY EVENT DATES OR JUST INCLUDE ALL BETWEEN SPECIFIED YEAR START AND YEAR END)
