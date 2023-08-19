@@ -1,8 +1,9 @@
 # Specifying user-customized options
-csv_filename <- "sample_addresses.csv" # Input CSV file, containing columns of ID variable, lat, lon, and optionally event dates
-year_start <- 2020 # Start year of Daymet NetCDF data download
-year_end <- 2021 # End year of Daymet NetCDF data download
+csv_filename <- "sample_addresses_dates.csv" # Input CSV file, containing columns of ID variable, lat, lon, and optionally event dates
+year_start <- 2009 # Start year of Daymet NetCDF data download
+year_end <- 2022 # End year of Daymet NetCDF data download
 daymet_variables <- "tmax,tmin" # Comma-separated string of Daymet variables: tmax,tmin,srad,vp,swe,prcp,dayl
+lag <- 7 # Lag in days for Daymet data to be pulled (days prior to event dates - event dates will be included as well)
 #### DO NOT CHANGE ANYTHING AFTER THIS ####
 
 # Daymet weather variables include daily minimum and maximum temperature, precipitation,
@@ -24,12 +25,67 @@ library(gtools)
 library(data.table)
 
 # Writing functions
+# Creating function to import and process the patient addresses and optionally event dates
+import_data <- function(.csv_filename = csv_filename, .year_start = year_start, .year_end = year_end) {
+  # Reading in the patient data
+  patient_data <- read_csv(.csv_filename)
+  # Assigning the very first column in the patient data as the ID column
+  id <- patient_data %>%
+    select(1) %>%
+    colnames()
+  # Separating the ID and address coordinates out into their own dataset
+  addresses <- patient_data %>%
+    select(!!id, lat, lon)
+  # Separating the ID and any other columns that aren't coordinates (presumed to be event dates) out into their own dataset
+  event_dates <- patient_data %>%
+    select(-lat, -lon)
+  # If the ID column in addresses is equal to lat or lon (no ID column was supplied by the user) then creating an ID column in addresses and event_dates that is just the row number
+  if (sum(addresses %>% select(!!id) == addresses %>% select(lat)) > 0 | sum(addresses %>% select(!!id) == addresses %>% select(lon))) {
+    addresses <- addresses %>%
+      mutate(id = as.character(1:nrow(addresses))) %>%
+      relocate(id)
+    event_dates <- event_dates %>%
+      mutate(id = as.character(1:nrow(event_dates))) %>%
+      relocate(id)
+    id <- addresses %>%
+      select(id) %>%
+      colnames()
+  }
+  # If any columns that are not the ID column are characters, then converting them to dates
+  event_dates <- event_dates %>%
+    mutate(across(where(is.character) & !as.name(id), mdy))
+  # If the only column in the event_dates dataset is the ID column (no event dates were supplied by the user), then filling in every single day between year_start and year_end
+  year_start_date <- ymd(.year_start, truncated = 2L)
+  year_end_date <- ymd(.year_end, truncated = 2L)
+  if (leap_year(year_end_date)) {
+    year_end_date <- year_end_date + 365
+  } else {
+    year_end_date <- year_end_date + 364
+  }
+  if (!FALSE %in% (colnames(event_dates) == id)) {
+    date_range <- as.data.frame(matrix(rep(year_start_date:year_end_date, nrow(event_dates)), ncol = length(year_start_date:year_end_date), byrow = TRUE))
+    names(date_range) <- c(paste0("date_", 1:ncol(date_range)))
+    date_range <- date_range %>%
+      mutate_all(as_date)
+    event_dates <- cbind(event_dates, date_range)
+  }
+  # Converting the patient addresses to a SpatVector
+  coords <- vect(addresses, geom = c("lon", "lat"), crs = "+proj=longlat +ellips=WGS84")
+  # Returning a list of objects needed later
+  out <- list("id" = id, "addresses" = addresses, "event_dates" = event_dates, "year_start_date" = year_start_date, "year_end_date" = year_end_date, "coords" = coords)
+  return(out)
+}
+
 # Creating function to link the Daymet data coordinates to the patient address coordinates for a specified patient and specified date
-daymet_select <- function(id_var, date_var, .template = template, .id = id, .time_dict = time_dict, .layer_dict = layer_dict, .daymet_data = daymet_data, .proj_coords = proj_coords, .main_dataset = main_dataset) {
+daymet_select <- function(id_var, date_var, silent = FALSE, .template = template, .year_start_date = year_start_date, .year_end_date = year_end_date, .id = id, .time_dict = time_dict, .layer_dict = layer_dict, .daymet_data = daymet_data, .proj_coords = proj_coords) {
   # Resetting the data to append with the main dataset template
   to_append <- .template
-  # Taking care of leap years, per Daymet conventions (12/31 is switched to 12/30)
+  # If the specified date is beyond the Daymet data available, then breaking out of the function
   date_var <- as_date(date_var)
+  if (date_var < .year_start_date | date_var > .year_end_date) {
+    return(NA)
+  }
+  # Taking care of leap years, per Daymet conventions (12/31 is switched to 12/30)
   if (leap_year(date_var) & month(date_var) == 12 & day(date_var) == 31) {
     date_var <- date_var - 1
   }
@@ -63,26 +119,23 @@ daymet_select <- function(id_var, date_var, .template = template, .id = id, .tim
     rename_variable_name <- paste0(dm_var, "_", date_num)
     daymet_variable_df <- daymet_variable_df %>%
       rename(!!dm_var := !!rename_variable_name)
-    to_append <- rows_update(to_append, daymet_variable_df)
+    if (silent == TRUE) {
+      to_append <- suppressMessages(rows_update(to_append, daymet_variable_df))
+    } else {
+      to_append <- rows_update(to_append, daymet_variable_df)
+    }
   }
-  # Setting initial column types of the main dataset
-  if (nrow(.main_dataset) == 0) {
-    col_types <- sapply(to_append, class)
-    col_types <- as.data.frame(col_types) %>%
-      rownames_to_column("var")
-    type_conversions <- Map(function(v, t) get(paste0("as.", t))(.main_dataset[[v]]), col_types$var, col_types$col_types)
-    .main_dataset <- setDT(data.frame(type_conversions, stringsAsFactors = FALSE))
-  }
-  # Appending the Daymet data into the main dataset
-  .main_dataset <- rbindlist(list(.main_dataset, to_append))
-  return(.main_dataset)
+  return(to_append)
 }
 
-# Reading in the patient address data
-addresses <- read_csv(csv_filename)
-
-# Converting the patient addresses to a SpatVector
-coords <- vect(addresses, geom = c("lon", "lat"), crs = "+proj=longlat +ellips=WGS84")
+# Importing and processing the patient data
+import_data_out <- import_data()
+id <- import_data_out$id
+addresses <- import_data_out$addresses
+event_dates <- import_data_out$event_dates
+year_start_date <- import_data_out$year_start_date
+year_end_date <- import_data_out$year_end_date
+coords <- import_data_out$coords
 
 # Finding the min and max longitude and latitude out of all the patient address coordinates
 min_lon <- min(addresses$lon)
@@ -101,9 +154,6 @@ max_lat <- max_lat + noise[4]
 # Downloading the Daymet NetCDF data defined by the coordinate bounding box: One file per variable per year
 # This procedure extracts the bounding box from the patient coordinates + noise, but we'll also want to add an option that lets the user specify their own bounding box
 # Additionally creating a main dataset to contain all linked Daymet data - new observations will all be appended (vertical dataset)
-id <- addresses %>%
-  select(1) %>%
-  colnames()
 main_dataset_colnames <- c(id, "date")
 daymet_variables <- str_remove(daymet_variables, " ")
 daymet_variables <- str_split(daymet_variables, ",", simplify = TRUE)
@@ -159,14 +209,67 @@ for (i in 1:length(netcdf_list)) {
 new_crs <- crs(daymet_data, proj = TRUE)
 proj_coords <- project(coords, new_crs)
 
-# Linking the Daymet data coordinates to the patient address coordinates for a specified patient and specified date
-id_var <- "patid1" # Specified patient
-date_var <- "2021-01-01" # Specified date
-main_dataset <- daymet_select(id_var, date_var)
+# Combining all the event dates into a list
+event_dates <- event_dates %>%
+  mutate(event_date_list = pmap(select(., -!!id), c)) %>%
+  select(!!id, event_date_list)
+event_dates$event_date_list <- map(event_dates$event_date_list, unname)
+event_dates$event_date_list <- map(event_dates$event_date_list, na.omit)
+event_dates$event_date_list <- map(event_dates$event_date_list, as_date)
+event_dates$event_date_list <- map(event_dates$event_date_list, unlist)
+
+# For each event date list, adding in new dates that correspond to the specified lag
+lag <- as.numeric(lag)
+if (lag > 0) {
+  for (lag_step in 1:lag) {
+    new_dates <- map(event_dates$event_date_list, ~ .x - lag_step)
+    event_dates$new_dates <- new_dates
+    if (lag_step == 1) {
+      event_dates$event_date_list_lag <- map2(event_dates$event_date_list, event_dates$new_dates, c)
+    } else {
+      event_dates$event_date_list_lag <- map2(event_dates$event_date_list_lag, event_dates$new_dates, c)
+    }
+    event_dates <- event_dates %>%
+      select(-new_dates)
+  }
+  event_dates <- event_dates %>%
+    select(-event_date_list) %>%
+    rename(event_date_list = event_date_list_lag)
+}
+
+# Sorting each event date list, and removing duplicates
+event_dates$event_date_list <- map(event_dates$event_date_list, sort)
+event_dates$event_date_list <- map(event_dates$event_date_list, unique)
+
+# Linking the Daymet data coordinates to the patient address coordinates across all event dates
+for (obs in 1:nrow(event_dates)) {
+  # Selecting the patient
+  id_var <- event_dates %>%
+    select(!!id) %>%
+    filter(row_number() == obs) %>%
+    pull
+  # Mapping across the event dates for the selected patient
+  daymet_select_output <- map(unlist(event_dates$event_date_list[obs]), daymet_select, id_var = id_var, silent = TRUE)
+  daymet_select_output <- daymet_select_output[!is.na(daymet_select_output)]
+  daymet_select_output <- rbindlist(daymet_select_output)
+  if (nrow(daymet_select_output) > 0) {
+    # Setting initial column types of the main dataset
+    if (nrow(main_dataset) == 0) {
+      col_types <- sapply(daymet_select_output, class)
+      col_types <- as.data.frame(col_types) %>%
+        rownames_to_column("var")
+      type_conversions <- Map(function(v, t) get(paste0("as.", t))(main_dataset[[v]]), col_types$var, col_types$col_types)
+      main_dataset <- setDT(data.frame(type_conversions, stringsAsFactors = FALSE))
+    }
+    # Appending the Daymet data into the main dataset
+    main_dataset <- rbindlist(list(main_dataset, daymet_select_output))
+  }
+}
 
 # Sorting and de-duplicating the final results (duplicates could have resulted from leap years)
+get_id <- id
 main_dataset <- main_dataset %>%
-  mutate(sort1 = factor(get(id), ordered = TRUE, levels = unique(mixedsort(get(id)))),
+  mutate(sort1 = factor(get(get_id), ordered = TRUE, levels = unique(mixedsort(get(get_id)))),
          sort2 = factor(date, ordered = TRUE, levels = unique(mixedsort(date)))) %>%
   arrange(sort1, sort2) %>%
   select(-c(sort1, sort2)) %>%
@@ -181,6 +284,4 @@ rm(list = ls(all.names = TRUE))
 unlink(list.files(pattern = "_ncss.nc$"), force = TRUE)
 
 # NEXT STEPS:
-# - BUILD OUT THE EVENT DATE DETECTOR (EVENT DATES TO LIST, EXPAND WITH SPECIFIED LAG, SORT AND REMOVE DUPLICATES, SELECT FROM LIST IN ORDER AND PULL RELEVANT LAYERS FROM RASTER STACK)
-# -- SEPARATE THE EVENT DATES OR FILLED DATES FROM THE COORDINATES
-# - ADD IN CODE FOR EXTRA OPTIONS (DAYMETR OPTIONS, BOUNDING BOX OPTIONS, SPECIFY EVENT DATES OR JUST INCLUDE ALL BETWEEN SPECIFIED YEAR START AND YEAR END)
+# - ADD IN CODE FOR EXTRA OPTIONS (DAYMETR OPTIONS, BOUNDING BOX OPTIONS)
