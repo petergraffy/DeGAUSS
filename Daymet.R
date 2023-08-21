@@ -152,8 +152,8 @@ max_lat <- max_lat + noise[4]
 
 # Downloading the Daymet NetCDF data defined by the coordinate bounding box: One file per variable per year
 # This procedure extracts the bounding box from the patient coordinates + noise, but we'll also want to add an option that lets the user specify their own bounding box
-# Additionally creating a main dataset to contain all linked Daymet data - new observations will all be appended (vertical dataset)
-main_dataset_colnames <- c(id, "date")
+# Additionally creating a template to link all Daymet data to - new observations will all be appended (vertical dataset)
+template_colnames <- c(id, "date")
 daymet_variables <- str_remove(daymet_variables, " ")
 daymet_variables <- str_split(daymet_variables, ",", simplify = TRUE)
 for (variable in daymet_variables) {
@@ -166,11 +166,10 @@ for (variable in daymet_variables) {
                        silent = FALSE,
                        force = TRUE,
                        path = getwd())
-  main_dataset_colnames[[length(main_dataset_colnames) + 1]] <- variable
+  template_colnames[[length(template_colnames) + 1]] <- variable
 }
-main_dataset <- as.data.table(matrix(nrow = 0, ncol = length(main_dataset_colnames)))
-colnames(main_dataset) <- main_dataset_colnames
-template <- main_dataset
+template <- as.data.table(matrix(nrow = 0, ncol = length(template_colnames)))
+colnames(template) <- template_colnames
 template <- rbindlist(list(template, list(NA)), fill = TRUE)
 template <- template %>%
   mutate_if(is.logical, as.numeric)
@@ -208,6 +207,10 @@ for (i in 1:length(netcdf_list)) {
 new_crs <- crs(daymet_data, proj = TRUE)
 proj_coords <- project(coords, new_crs)
 
+# Filtering out any rows in event_dates where the event dates are all missing
+event_dates <- event_dates %>%
+  filter(if_any(-!!id, ~ !is.na(.)))
+
 # Combining all the event dates into a list
 event_dates <- event_dates %>%
   mutate(event_date_list = pmap(select(., -!!id), c)) %>%
@@ -215,7 +218,6 @@ event_dates <- event_dates %>%
 event_dates$event_date_list <- map(event_dates$event_date_list, unname)
 event_dates$event_date_list <- map(event_dates$event_date_list, na.omit)
 event_dates$event_date_list <- map(event_dates$event_date_list, as_date)
-event_dates$event_date_list <- map(event_dates$event_date_list, unlist)
 
 # For each event date list, adding in new dates that correspond to the specified lag
 lag <- as.numeric(lag)
@@ -240,30 +242,14 @@ if (lag > 0) {
 event_dates$event_date_list <- map(event_dates$event_date_list, sort)
 event_dates$event_date_list <- map(event_dates$event_date_list, unique)
 
+# Extending each ID to be a list of length equal to the event date list
+event_dates$id_list <- map(event_dates$event_date_list, as.character)
+event_dates$id_list <- map2(event_dates$id_list, unlist(unname(as.vector(event_dates[as.character(id)]))), str_replace, pattern = ".*")
+
 # Linking the Daymet data coordinates to the patient address coordinates across all event dates
-for (obs in 1:nrow(event_dates)) {
-  # Selecting the patient
-  id_var <- event_dates %>%
-    select(!!id) %>%
-    filter(row_number() == obs) %>%
-    pull
-  # Mapping across the event dates for the selected patient
-  daymet_select_output <- map(unlist(event_dates$event_date_list[obs]), daymet_select, id_var = id_var, silent = TRUE)
-  daymet_select_output <- daymet_select_output[!is.na(daymet_select_output)]
-  daymet_select_output <- rbindlist(daymet_select_output)
-  if (nrow(daymet_select_output) > 0) {
-    # Setting initial column types of the main dataset
-    if (nrow(main_dataset) == 0) {
-      col_types <- sapply(daymet_select_output, class)
-      col_types <- as.data.frame(col_types) %>%
-        rownames_to_column("var")
-      type_conversions <- Map(function(v, t) get(paste0("as.", t))(main_dataset[[v]]), col_types$var, col_types$col_types)
-      main_dataset <- setDT(data.frame(type_conversions, stringsAsFactors = FALSE))
-    }
-    # Appending the Daymet data into the main dataset
-    main_dataset <- rbindlist(list(main_dataset, daymet_select_output))
-  }
-}
+daymet_select_output <- map2(unlist(event_dates$id_list), unlist(event_dates$event_date_list), daymet_select, silent = TRUE)
+daymet_select_output <- daymet_select_output[!is.na(daymet_select_output)]
+main_dataset <- rbindlist(daymet_select_output)
 
 # Sorting and de-duplicating the final results (duplicates could have resulted from leap years)
 get_id <- id
@@ -283,7 +269,7 @@ rm(list = ls(all.names = TRUE))
 unlink(list.files(pattern = "_ncss.nc$"), force = TRUE)
 
 # NEXT STEPS:
-# - VECTORIZE FOR LOOPS THAT WILL BE REPEATED: LOOPING THROUGH ROWS OF EVENT_DATES TO LINK DAYMET DATA (TRY CREATING VECTOR OF IDS EQUAL TO THE LENGTH OF THE DATE VECTOR AND THEN DOING MAP2)
-# - ADD IN CODE FOR EXTRA OPTIONS (DAYMETR OPTIONS, BOUNDING BOX OPTIONS)
+# - TEST WITH NO EVENT DATES IN RANGE OF DAYMET DATA, AND TEST ADDRESS OUTSIDE DAYMET BOUNDING BOX
 # - ADD IN CODE THAT CHECKS FOR LAT/LON IN INPUT DATA, AND THROWS AN ERROR IF IT'S NOT
-# - TEST WITH ADDRESS OUTSIDE DAYMET BOUNDING BOX
+# - ADD IN CODE FOR EXTRA OPTIONS (DAYMETR OPTIONS, BOUNDING BOX OPTIONS)
+# - TEST WITH CAPRICORN DAYMET
