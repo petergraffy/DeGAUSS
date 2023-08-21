@@ -103,13 +103,7 @@ daymet_select <- function(id_var, date_var, silent = FALSE, .template = template
   # Extracting the Daymet data for the specified patient and specified date
   layers <- .layer_dict %>%
     filter(yr == year(date_var))
-  for (row in 1:nrow(layers)) {
-    dm_var <- layers[row, ] %>%
-      select(dm_var) %>%
-      pull
-    multiplier <- layers[row, ] %>%
-      select(multiplier) %>%
-      pull
+  daymet_extract <- function(dm_var, multiplier) {
     date_num_subset <- date_num + (365 * multiplier)
     daymet_linked <- terra::extract(subset(.daymet_data, date_num_subset),
                                     subset(.proj_coords, .proj_coords[[names(.proj_coords)]] == id_var),
@@ -119,11 +113,16 @@ daymet_select <- function(id_var, date_var, silent = FALSE, .template = template
     rename_variable_name <- paste0(dm_var, "_", date_num)
     daymet_variable_df <- daymet_variable_df %>%
       rename(!!dm_var := !!rename_variable_name)
-    if (silent == TRUE) {
-      to_append <- suppressMessages(rows_update(to_append, daymet_variable_df))
-    } else {
-      to_append <- rows_update(to_append, daymet_variable_df)
-    }
+    return(daymet_variable_df)
+  }
+  daymet_extract_output <- map2_df(layers$dm_var, layers$multiplier, daymet_extract)
+  daymet_extract_output <- daymet_extract_output %>%
+    fill(-!!.id, .direction = "downup") %>%
+    distinct()
+  if (silent == TRUE) {
+    to_append <- suppressMessages(rows_update(to_append, daymet_extract_output))
+  } else {
+    to_append <- rows_update(to_append, daymet_extract_output)
   }
   return(to_append)
 }
@@ -284,5 +283,7 @@ rm(list = ls(all.names = TRUE))
 unlink(list.files(pattern = "_ncss.nc$"), force = TRUE)
 
 # NEXT STEPS:
-# - VECTORIZE FOR LOOPS THAT WILL BE REPEATED: LOOPING THROUGH LAYERS IN DAYMET_SELECT (WRITE A NESTED FUNCTION AND MAP2 WITH DM_VAR AND MULTIPLIER); LOOPING THROUGH ROWS OF EVENT_DATES TO LINK DAYMET DATA (TRY CREATING VECTOR OF IDS EQUAL TO THE LENGTH OF THE DATE VECTOR AND THEN DOING MAP2)
+# - VECTORIZE FOR LOOPS THAT WILL BE REPEATED: LOOPING THROUGH ROWS OF EVENT_DATES TO LINK DAYMET DATA (TRY CREATING VECTOR OF IDS EQUAL TO THE LENGTH OF THE DATE VECTOR AND THEN DOING MAP2)
 # - ADD IN CODE FOR EXTRA OPTIONS (DAYMETR OPTIONS, BOUNDING BOX OPTIONS)
+# - ADD IN CODE THAT CHECKS FOR LAT/LON IN INPUT DATA, AND THROWS AN ERROR IF IT'S NOT
+# - TEST WITH ADDRESS OUTSIDE DAYMET BOUNDING BOX
