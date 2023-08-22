@@ -33,6 +33,9 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
   id <- patient_data %>%
     select(1) %>%
     colnames()
+  # Filtering out rows in the patient data where lat or lon are missing
+  patient_data <- patient_data %>%
+    filter(!is.na(lat) & !is.na(lon))
   # Separating the ID and address coordinates out into their own dataset
   addresses <- patient_data %>%
     select(!!id, lat, lon)
@@ -40,7 +43,7 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
   event_dates <- patient_data %>%
     select(-lat, -lon)
   # If the ID column in addresses is equal to lat or lon (no ID column was supplied by the user) then creating an ID column in addresses and event_dates that is just the row number
-  if (sum(addresses %>% select(!!id) == addresses %>% select(lat)) > 0 | sum(addresses %>% select(!!id) == addresses %>% select(lon))) {
+  if (sum(addresses %>% select(!!id) == addresses %>% select(lat), na.rm = TRUE) > 0 | sum(addresses %>% select(!!id) == addresses %>% select(lon), na.rm = TRUE) > 0) {
     addresses <- addresses %>%
       mutate(id = as.character(1:nrow(addresses))) %>%
       relocate(id)
@@ -251,6 +254,15 @@ daymet_select_output <- map2(unlist(event_dates$id_list), unlist(event_dates$eve
 daymet_select_output <- daymet_select_output[!is.na(daymet_select_output)]
 main_dataset <- rbindlist(daymet_select_output)
 
+# Handling cases where an address was outside of the bounding box of loaded Daymet data
+main_dataset <- main_dataset %>%
+  filter(if_any(-c(!!id, date), ~ !is.na(.)))
+
+# Handling cases where none of the event dates were within the date range of loaded Daymet data
+if (nrow(main_dataset) == 0 & ncol(main_dataset) == 0) {
+  main_dataset <- template
+}
+
 # Sorting and de-duplicating the final results (duplicates could have resulted from leap years)
 get_id <- id
 main_dataset <- main_dataset %>%
@@ -262,14 +274,16 @@ main_dataset <- main_dataset %>%
 
 # Writing the results out as a CSV file
 csv_out <- paste0(unlist(str_split(csv_filename, ".csv"))[1], "_daymet", ".csv")
-write_csv(main_dataset, csv_out)
+write.csv(main_dataset, csv_out, na = "", row.names = FALSE)
 
 # Deleting the NetCDF files that were downloaded from disk
 rm(list = ls(all.names = TRUE))
 unlink(list.files(pattern = "_ncss.nc$"), force = TRUE)
 
 # NEXT STEPS:
-# - TEST WITH NO EVENT DATES IN RANGE OF DAYMET DATA, AND TEST ADDRESS OUTSIDE DAYMET BOUNDING BOX
+# - ADD IN CODE TO THROW AN ERROR IF THERE ARE REPEATS IN IDS (TELL USER THAT USER-SUPPLIED IDS MUST BE UNIQUE)
+# - ADD IN CODE TO THROW AN ERROR IF THERE ARE MISSING IDS (TELL USER THAT USER-SUPPLIED IDS MUST BE COMPLETE)
+# - ADD IN CODE TO TRYCATCH DATA TYPE CONVERSIONS (TELL USER THAT A CERTAIN CONVERSION FAILED, AND GIVE AN EXAMPLE OF EXPECTED INPUT)
 # - ADD IN CODE THAT CHECKS FOR LAT/LON IN INPUT DATA, AND THROWS AN ERROR IF IT'S NOT
 # - ADD IN CODE FOR EXTRA OPTIONS (DAYMETR OPTIONS, BOUNDING BOX OPTIONS)
 # - TEST WITH CAPRICORN DAYMET
