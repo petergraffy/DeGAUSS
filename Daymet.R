@@ -122,11 +122,18 @@ daymet_select <- function(id_var, date_var, silent = FALSE, .template = template
   daymet_extract_output <- daymet_extract_output %>%
     fill(-!!.id, .direction = "downup") %>%
     distinct()
-  if (silent == TRUE) {
-    to_append <- suppressMessages(rows_update(to_append, daymet_extract_output))
-  } else {
-    to_append <- rows_update(to_append, daymet_extract_output)
-  }
+  tryCatch({
+    if (silent == TRUE) {
+      to_append <- suppressMessages(rows_update(to_append, daymet_extract_output))
+    } else {
+      to_append <- rows_update(to_append, daymet_extract_output)
+    }
+  }, error = function(e) {
+    stop(call. = FALSE, paste('Error in Daymet data merge, user-supplied IDs must be unique.',
+                              id_var, 'is not unique. Quitting program.'))
+  }, warning = function(w) {
+    print(w)
+  })
   return(to_append)
 }
 
@@ -247,21 +254,27 @@ event_dates$event_date_list <- map(event_dates$event_date_list, unique)
 
 # Extending each ID to be a list of length equal to the event date list
 event_dates$id_list <- map(event_dates$event_date_list, as.character)
-event_dates$id_list <- map2(event_dates$id_list, unlist(unname(as.vector(event_dates[as.character(id)]))), str_replace, pattern = ".*")
+tryCatch({
+  event_dates$id_list <- map2(event_dates$id_list, unlist(unname(as.vector(event_dates[as.character(id)]))), str_replace, pattern = ".*")
+}, error = function(e) {
+  stop(call. = FALSE, 'Error in processing, user-supplied IDs are entirely missing. Quitting program.')
+}, warning = function(w) {
+  print(w)
+})
 
 # Linking the Daymet data coordinates to the patient address coordinates across all event dates
 daymet_select_output <- map2(unlist(event_dates$id_list), unlist(event_dates$event_date_list), daymet_select, silent = TRUE)
 daymet_select_output <- daymet_select_output[!is.na(daymet_select_output)]
 main_dataset <- rbindlist(daymet_select_output)
 
-# Handling cases where an address was outside of the bounding box of loaded Daymet data
-main_dataset <- main_dataset %>%
-  filter(if_any(-c(!!id, date), ~ !is.na(.)))
-
 # Handling cases where none of the event dates were within the date range of loaded Daymet data
 if (nrow(main_dataset) == 0 & ncol(main_dataset) == 0) {
   main_dataset <- template
 }
+
+# Handling cases where an address was outside of the bounding box of loaded Daymet data
+main_dataset <- main_dataset %>%
+  filter(if_any(-c(!!id, date), ~ !is.na(.)))
 
 # Sorting and de-duplicating the final results (duplicates could have resulted from leap years)
 get_id <- id
@@ -281,8 +294,6 @@ rm(list = ls(all.names = TRUE))
 unlink(list.files(pattern = "_ncss.nc$"), force = TRUE)
 
 # NEXT STEPS:
-# - ADD IN CODE TO THROW AN ERROR IF THERE ARE REPEATS IN IDS (TELL USER THAT USER-SUPPLIED IDS MUST BE UNIQUE)
-# - ADD IN CODE TO THROW AN ERROR IF THERE ARE MISSING IDS (TELL USER THAT USER-SUPPLIED IDS MUST BE COMPLETE)
 # - ADD IN CODE TO TRYCATCH DATA TYPE CONVERSIONS (TELL USER THAT A CERTAIN CONVERSION FAILED, AND GIVE AN EXAMPLE OF EXPECTED INPUT)
 # - ADD IN CODE THAT CHECKS FOR LAT/LON IN INPUT DATA, AND THROWS AN ERROR IF IT'S NOT
 # - ADD IN CODE FOR EXTRA OPTIONS (DAYMETR OPTIONS, BOUNDING BOX OPTIONS)
