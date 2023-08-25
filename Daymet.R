@@ -1,10 +1,43 @@
+# Creating function to specify user-customized options
+set_options <- function(csv_filename, year_start, year_end, daymet_variables, lag, min_lon = 0, max_lon = 0, min_lat = 0, max_lat = 0, region = "na") {
+  # csv_filename: Input CSV file, containing columns of ID variable, lat, lon, and optionally event dates.
+  # year_start: Start year of Daymet NetCDF data download.
+  # year_end: End year of Daymet NetCDF data download.
+  # daymet_variables: Comma-separated string of Daymet variables: "tmax,tmin,srad,vp,swe,prcp,dayl".
+  # lag: Lag in days for Daymet data to be pulled (number of days prior to event dates - event dates will be included as well).
+  # min_lon: [Optional] Minimum longitude (in decimal degrees) of bounding box for Daymet data download.
+  # max_lon: [Optional] Maximum longitude (in decimal degrees) of bounding box for Daymet data download.
+  # min_lat: [Optional] Minimum latitude (in decimal degrees) of bounding box for Daymet data download.
+  # max_lat: [Optional] Maximum latitude (in decimal degrees) of bounding box for Daymet data download.
+  # region: [Optional] Daymet spatial region ("na" for continental North America, "hi" for Hawaii, or "pr" for Puerto Rico).
+  
+  # Returning a list of objects needed later
+  out <- list("csv_filename" = csv_filename, "year_start" = year_start, "year_end" = year_end, "daymet_variables" = daymet_variables, "lag" = lag, "min_lon" = min_lon, "max_lon" = max_lon, "min_lat" = min_lat, "max_lat" = max_lat, "region" = region)
+  return(out)  
+}
+
 # Specifying user-customized options
-csv_filename <- "sample_addresses_dates.csv" # Input CSV file, containing columns of ID variable, lat, lon, and optionally event dates
-year_start <- 2009 # Start year of Daymet NetCDF data download
-year_end <- 2022 # End year of Daymet NetCDF data download
-daymet_variables <- "tmax,tmin" # Comma-separated string of Daymet variables: tmax,tmin,srad,vp,swe,prcp,dayl
-lag <- 7 # Lag in days for Daymet data to be pulled (days prior to event dates - event dates will be included as well)
+#### DO NOT CHANGE ANYTHING BEFORE THIS ####
+set_options_out <- set_options(csv_filename = "sample_addresses_dates.csv",
+                               year_start = 2009,
+                               year_end = 2022,
+                               daymet_variables = "tmax,tmin",
+                               lag = 7,
+                               min_lon = -89.570714,
+                               max_lon = -85.952434,
+                               min_lat = 39.669027,
+                               max_lat = 43.095030)
 #### DO NOT CHANGE ANYTHING AFTER THIS ####
+csv_filename <- set_options_out$csv_filename
+year_start <- set_options_out$year_start
+year_end <- set_options_out$year_end
+daymet_variables <- set_options_out$daymet_variables
+lag <- set_options_out$lag
+min_lon <- set_options_out$min_lon
+max_lon <- set_options_out$max_lon
+min_lat <- set_options_out$min_lat
+max_lat <- set_options_out$max_lat
+region <- set_options_out$region
 
 # Daymet weather variables include daily minimum and maximum temperature, precipitation,
 # vapor pressure, shortwave radiation, snow water equivalent, and day length produced on
@@ -18,7 +51,7 @@ lag <- 7 # Lag in days for Daymet data to be pulled (days prior to event dates -
 # and December 31 is discarded from leap years to maintain a 365-day year.
 
 # Loading necessary packages
-library(daymetr)
+library(daymetr) # Requires the development release (remotes::install_github("bluegreen-labs/daymetr")) to use Hawaii and Puerto Rico data, until the changes on GitHub are uploaded to CRAN
 library(tidyverse)
 library(terra)
 library(gtools)
@@ -133,6 +166,96 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
   return(out)
 }
 
+# Creating function to download and load the Daymet NetCDF data
+daymet_download_load <- function(.min_lon = min_lon, .max_lon = max_lon, .min_lat = min_lat, .max_lat = max_lat, .id = id, .daymet_variables = daymet_variables, .year_start = year_start, .year_end = year_end, .region = region) {
+  # If the Daymet data bounding box was not supplied by the user, then inferring the bounding box from the input address coordinates
+  if (.min_lon == 0 & .max_lon == 0 & .min_lat == 0 & .max_lat == 0) {
+    # Finding the min and max longitude and latitude out of all the input address coordinates
+    .min_lon <- min(addresses$lon)
+    .max_lon <- max(addresses$lon)
+    .min_lat <- min(addresses$lat)
+    .max_lat <- max(addresses$lat)
+    # In order to preserve privacy, adding a random amount of noise to the bounding box of input addresses
+    # Each bounding box point (e.g., maximum latitude) will be extended by an additional 1-22 kilometers
+    noise <- runif(4, min = 0.01, max = 0.2)
+    .min_lon <- .min_lon - noise[1]
+    .max_lon <- .max_lon + noise[2]
+    .min_lat <- .min_lat - noise[3]
+    .max_lat <- .max_lat + noise[4]
+  }
+  # Otherwise, verifying that the user-supplied bounding box consists of numeric coordinates
+  if (!is.numeric(.min_lon) | !is.numeric(.max_lon) | !is.numeric(.min_lat) | !is.numeric(.max_lat)) {
+    stop(call. = FALSE, 'Please ensure that user-supplied Daymet bounding box has coordinates in numeric decimal degrees.')
+  }
+  # Additionally verifying that for user-supplied bounding box coordinates, the minimum coordinates are less than the maximum coordinates
+  if (!(.min_lon < .max_lon)) {
+    stop(call. = FALSE, paste0('Please ensure that bounding box min_lon: ', .min_lon,
+                              ' is less than bounding box max_lon: ', .max_lon, '.'))
+  }
+  if (!(.min_lat < .max_lat)) {
+    stop(call. = FALSE, paste0('Please ensure that bounding box min_lat: ', .min_lat,
+                               ' is less than bounding box max_lat: ', .max_lat, '.'))
+  }
+  # Downloading the Daymet NetCDF data defined by the coordinate bounding box: One file per variable per year
+  # Additionally creating a template to link all Daymet data to - new observations will all be appended (vertical dataset)
+  template_colnames <- c(.id, "date")
+  .daymet_variables <- str_remove(.daymet_variables, " ")
+  .daymet_variables <- str_split(.daymet_variables, ",", simplify = TRUE)
+  for (variable in .daymet_variables) {
+    download_daymet_ncss(location = c(.max_lat, .min_lon, .min_lat, .max_lon), # Bounding box defined as top left / bottom right pair c(lat, lon, lat, lon)
+                         start = .year_start,
+                         end = .year_end,
+                         param = variable,
+                         frequency = "daily",
+                         mosaic = .region,
+                         silent = FALSE,
+                         force = TRUE,
+                         path = getwd())
+    template_colnames[[length(template_colnames) + 1]] <- variable
+  }
+  template <- as.data.table(matrix(nrow = 0, ncol = length(template_colnames)))
+  colnames(template) <- template_colnames
+  template <- rbindlist(list(template, list(NA)), fill = TRUE)
+  template <- template %>%
+    mutate_if(is.logical, as.numeric)
+  # Loading the NetCDF files downloaded from Daymet as a SpatRaster raster stack
+  netcdf_list <- list.files(pattern = "_ncss.nc$")
+  # Checking for extra NetCDF files
+  if (length(netcdf_list) > (length(seq(.year_start, .year_end)) * length(.daymet_variables))) {
+    stop(call. = FALSE, 'Ensure that there are not extra NetCDF files in folder where Daymet data was downloaded to.')
+  }
+  # Initializing a time and layer dictionary
+  time_dict <- tibble(number = 1:365)
+  layer_dict_colnames <- c("dm_var", "yr", "multiplier")
+  layer_dict <- as_tibble(matrix(nrow = length(netcdf_list), ncol = length(layer_dict_colnames)), .name_repair = ~ layer_dict_colnames)
+  for (i in 1:length(netcdf_list)) {
+    daymet_load <- rast(netcdf_list[i])
+    # Extracting the year and Daymet variable from the file loaded in
+    yr <- str_extract(netcdf_list[i], "[0-9]{4}")
+    dm_var <- unlist(str_split(netcdf_list[i], "_"))[1]
+    # Creating a dictionary to link numbers 1–365 to a date in a year (time dictionary)
+    origin <- as_date(paste0(yr, "-01-01")) - 1 # Numbers count days since origin
+    new_date_col <- paste0("date_", yr)
+    if (!new_date_col %in% colnames(time_dict)) {
+      time_dict <- time_dict %>%
+        mutate(!!new_date_col := as_date(number, origin = origin))
+    }
+    # Creating a dictionary to assign a multiplier for identifying different layers in the raster stack (layer dictionary)
+    layer_dict$dm_var[i] <- dm_var
+    layer_dict$yr[i] <- yr
+    layer_dict$multiplier[i] <- i - 1
+    # Stacking the Daymet data rasters
+    if (i == 1) {
+      daymet_data <- daymet_load
+    } else {
+      daymet_data <- c(daymet_data, daymet_load)
+    }
+  }
+  # Returning a list of objects needed later
+  out <- list("template" = template, "time_dict" = time_dict, "layer_dict" = layer_dict, "daymet_data" = daymet_data)
+  return(out)
+}
+
 # Creating function to link the Daymet data coordinates to the input address coordinates for a specified ID and specified date
 daymet_select <- function(id_var, date_var, silent = FALSE, .template = template, .year_start_date = year_start_date, .year_end_date = year_end_date, .id = id, .time_dict = time_dict, .layer_dict = layer_dict, .daymet_data = daymet_data, .proj_coords = proj_coords) {
   # Resetting the data to append with the output data template
@@ -212,76 +335,12 @@ year_start_date <- import_data_out$year_start_date
 year_end_date <- import_data_out$year_end_date
 coords <- import_data_out$coords
 
-# Finding the min and max longitude and latitude out of all the input address coordinates
-min_lon <- min(addresses$lon)
-max_lon <- max(addresses$lon)
-min_lat <- min(addresses$lat)
-max_lat <- max(addresses$lat)
-
-# In order to preserve privacy, adding a random amount of noise to the bounding box of input addresses
-# Each bounding box point (e.g., maximum latitude) will be extended by an additional 1-22 kilometers
-noise <- runif(4, min = 0.01, max = 0.2)
-min_lon <- min_lon - noise[1]
-max_lon <- max_lon + noise[2]
-min_lat <- min_lat - noise[3]
-max_lat <- max_lat + noise[4]
-
-# Downloading the Daymet NetCDF data defined by the coordinate bounding box: One file per variable per year
-# THIS PROCEDURE EXTRACTS THE BOUNDING BOX FROM THE INPUT COORDINATES + NOISE, BUT WE'LL ALSO WANT TO ADD AN OPTION THAT LETS THE USER SPECIFY THEIR OWN BOUNDING BOX
-# Additionally creating a template to link all Daymet data to - new observations will all be appended (vertical dataset)
-template_colnames <- c(id, "date")
-daymet_variables <- str_remove(daymet_variables, " ")
-daymet_variables <- str_split(daymet_variables, ",", simplify = TRUE)
-for (variable in daymet_variables) {
-  download_daymet_ncss(location = c(max_lat, min_lon, min_lat, max_lon), # Bounding box defined as top left / bottom right pair c(lat, lon, lat, lon)
-                       start = year_start,
-                       end = year_end,
-                       param = variable,
-                       frequency = "daily",
-                       mosaic = "na",
-                       silent = FALSE,
-                       force = TRUE,
-                       path = getwd())
-  template_colnames[[length(template_colnames) + 1]] <- variable
-}
-template <- as.data.table(matrix(nrow = 0, ncol = length(template_colnames)))
-colnames(template) <- template_colnames
-template <- rbindlist(list(template, list(NA)), fill = TRUE)
-template <- template %>%
-  mutate_if(is.logical, as.numeric)
-
-# Loading the NetCDF files downloaded from Daymet as a SpatRaster raster stack
-netcdf_list <- list.files(pattern = "_ncss.nc$")
-# Checking for extra NetCDF files
-if (length(netcdf_list) > (length(seq(year_start, year_end)) * length(daymet_variables))) {
-  stop(call. = FALSE, 'Ensure that there are not extra NetCDF files in folder where Daymet data was downloaded to.')
-}
-time_dict <- tibble(number = 1:365)
-layer_dict_colnames <- c("dm_var", "yr", "multiplier")
-layer_dict <- as_tibble(matrix(nrow = length(netcdf_list), ncol = length(layer_dict_colnames)), .name_repair = ~ layer_dict_colnames)
-for (i in 1:length(netcdf_list)) {
-  daymet_load <- rast(netcdf_list[i])
-  # Extracting the year and Daymet variable from the file loaded in
-  yr <- str_extract(netcdf_list[i], "[0-9]{4}")
-  dm_var <- unlist(str_split(netcdf_list[i], "_"))[1]
-  # Creating a dictionary to link numbers 1–365 to a date in a year
-  origin <- as_date(paste0(yr, "-01-01")) - 1 # Numbers count days since origin
-  new_date_col <- paste0("date_", yr)
-  if (!new_date_col %in% colnames(time_dict)) {
-    time_dict <- time_dict %>%
-      mutate(!!new_date_col := as_date(number, origin = origin))
-  }
-  # Creating a dictionary to assign a multiplier for identifying different layers in the raster stack
-  layer_dict$dm_var[i] <- dm_var
-  layer_dict$yr[i] <- yr
-  layer_dict$multiplier[i] <- i - 1
-  # Stacking the Daymet data rasters
-  if (i == 1) {
-    daymet_data <- daymet_load
-  } else {
-    daymet_data <- c(daymet_data, daymet_load)
-  }
-}
+# Downloading and loading the Daymet NetCDF data
+daymet_download_load_out <- daymet_download_load()
+template <- daymet_download_load_out$template
+time_dict <- daymet_download_load_out$time_dict
+layer_dict <- daymet_download_load_out$layer_dict
+daymet_data <- daymet_download_load_out$daymet_data
 
 # Changing the coordinate reference system of the input addresses so they match that of Daymet
 new_crs <- crs(daymet_data, proj = TRUE)
@@ -376,7 +435,3 @@ write.csv(main_dataset, csv_out, na = "", row.names = FALSE)
 # Deleting the NetCDF files that were downloaded from disk
 rm(list = ls(all.names = TRUE))
 unlink(list.files(pattern = "_ncss.nc$"), force = TRUE)
-
-# NEXT STEPS:
-# - ADD IN CODE FOR EXTRA OPTIONS (DAYMETR OPTIONS, BOUNDING BOX OPTIONS)
-# - TEST WITH CAPRICORN DAYMET
