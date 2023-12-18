@@ -51,7 +51,7 @@ region <- set_options_out$region
 # and December 31 is discarded from leap years to maintain a 365-day year.
 
 # Loading necessary packages
-library(daymetr) # Requires the development release (remotes::install_github("bluegreen-labs/daymetr")) to use Hawaii and Puerto Rico data, until the changes on GitHub are uploaded to CRAN
+library(daymetr)
 library(tidyverse)
 library(terra)
 library(gtools)
