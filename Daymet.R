@@ -1,32 +1,34 @@
 # Creating function to specify user-customized options
-set_options <- function(csv_filename, year_start, year_end, daymet_variables, lag, min_lon = 0, max_lon = 0, min_lat = 0, max_lat = 0, region = "na") {
-  # csv_filename: Input CSV file, containing columns of ID variable, lat, lon, and optionally event dates.
+set_options <- function(csv_filename, year_start, year_end, daymet_variables, lag, min_lon = 0, max_lon = 0, min_lat = 0, max_lat = 0, region = "na", id_column = NA) {
+  # csv_filename: Input CSV file, containing columns of lat, lon, and optionally event dates and/or user-supplied ID column.
   # year_start: Start year of Daymet NetCDF data download.
   # year_end: End year of Daymet NetCDF data download.
   # daymet_variables: Comma-separated string of Daymet variables: "tmax,tmin,srad,vp,swe,prcp,dayl".
   # lag: Lag in days for Daymet data to be pulled (number of days prior to event dates - event dates will be included as well).
-  # min_lon: [Optional] Minimum longitude (in decimal degrees) of bounding box for Daymet data download.
-  # max_lon: [Optional] Maximum longitude (in decimal degrees) of bounding box for Daymet data download.
-  # min_lat: [Optional] Minimum latitude (in decimal degrees) of bounding box for Daymet data download.
-  # max_lat: [Optional] Maximum latitude (in decimal degrees) of bounding box for Daymet data download.
-  # region: [Optional] Daymet spatial region ("na" for continental North America, "hi" for Hawaii, or "pr" for Puerto Rico).
+  # min_lon: [Optional] Minimum longitude (in decimal degrees) of bounding box for Daymet data download. Default is to infer bounding box from address coordinates.
+  # max_lon: [Optional] Maximum longitude (in decimal degrees) of bounding box for Daymet data download. Default is to infer bounding box from address coordinates.
+  # min_lat: [Optional] Minimum latitude (in decimal degrees) of bounding box for Daymet data download. Default is to infer bounding box from address coordinates.
+  # max_lat: [Optional] Maximum latitude (in decimal degrees) of bounding box for Daymet data download. Default is to infer bounding box from address coordinates.
+  # region: [Optional] Daymet spatial region ("na" for continental North America, "hi" for Hawaii, or "pr" for Puerto Rico). Default is continental North America.
+  # id_column: [Optional] Name (as string) of user-supplied ID column (cannot be named "id"). Useful for later merging Daymet data with another dataset by the user-supplied ID column. Can contain repeats. Default is no user-supplied ID column included. In this case, the ID variable assigned is the row number of the input data.
   
   # Returning a list of objects needed later
-  out <- list("csv_filename" = csv_filename, "year_start" = year_start, "year_end" = year_end, "daymet_variables" = daymet_variables, "lag" = lag, "min_lon" = min_lon, "max_lon" = max_lon, "min_lat" = min_lat, "max_lat" = max_lat, "region" = region)
+  out <- list("csv_filename" = csv_filename, "year_start" = year_start, "year_end" = year_end, "daymet_variables" = daymet_variables, "lag" = lag, "min_lon" = min_lon, "max_lon" = max_lon, "min_lat" = min_lat, "max_lat" = max_lat, "region" = region, "id_column" = id_column)
   return(out)  
 }
 
 # Specifying user-customized options
 #### DO NOT CHANGE ANYTHING BEFORE THIS ####
 set_options_out <- set_options(csv_filename = "sample_addresses_dates.csv",
-                               year_start = 2009,
+                               year_start = 2010,
                                year_end = 2022,
                                daymet_variables = "tmax,tmin",
                                lag = 7,
                                min_lon = -89.570714,
                                max_lon = -85.952434,
                                min_lat = 39.669027,
-                               max_lat = 43.095030)
+                               max_lat = 43.095030,
+                               id_column = "patient_id")
 #### DO NOT CHANGE ANYTHING AFTER THIS ####
 csv_filename <- set_options_out$csv_filename
 year_start <- set_options_out$year_start
@@ -38,6 +40,7 @@ max_lon <- set_options_out$max_lon
 min_lat <- set_options_out$min_lat
 max_lat <- set_options_out$max_lat
 region <- set_options_out$region
+id_column <- set_options_out$id_column
 
 # Daymet weather variables include daily minimum and maximum temperature, precipitation,
 # vapor pressure, shortwave radiation, snow water equivalent, and day length produced on
@@ -62,17 +65,25 @@ library(dht)
 greeting()
 
 # Writing functions
-# Creating function to import and process the input addresses and optionally event dates
-import_data <- function(.csv_filename = csv_filename, .year_start = year_start, .year_end = year_end) {
+# Creating function to import and process the input addresses and optionally event dates and/or user-supplied ID column
+import_data <- function(.csv_filename = csv_filename, .year_start = year_start, .year_end = year_end, .id_column = id_column) {
   # Checking that the input data is a CSV file
   if (!str_detect(.csv_filename, ".csv$")) {
     stop(call. = FALSE, 'Input file must be a CSV.')
   }
   # Reading in the input data
-  input_data <- read_csv(.csv_filename)
-  # Assigning the very first column in the input data as the ID column
+  input_data <- fread(.csv_filename, header = TRUE, sep = ",")
+  input_data <- as_tibble(input_data)
+  # Creating an ID variable in the input data that is just the row number
+  if ("id" %in% colnames(input_data)) {
+    stop(call. = FALSE, 'Input file cannot contain a column named "id".')
+  }
+  input_data <- input_data %>%
+    mutate(id = as.character(1:nrow(input_data))) %>%
+    relocate(id)
+  # Assigning the ID variable in the input data as the ID variable object
   id <- input_data %>%
-    select(1) %>%
+    select(id) %>%
     colnames()
   # Ensuring that numeric lat and lon are in the input data, and quitting if not
   tryCatch({
@@ -90,36 +101,29 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
   # Filtering out rows in the input data where lat or lon are missing
   input_data <- input_data %>%
     filter(!is.na(lat) & !is.na(lon))
-  # Separating the ID and address coordinates out into their own dataset
+  # Separating the ID variable and user-supplied ID column out into their own dataset (will just be the ID variable if no user-supplied ID column was given)
+  if (!(!!.id_column %in% colnames(input_data)) & !is.na(.id_column)) {
+    stop(call. = FALSE, 'User-supplied ID column not in input file.')
+  }
+  if (!is.na(.id_column)) {
+    id_column_df <- input_data %>%
+      select(!!id, !!.id_column)
+    input_data <- input_data %>%
+      select(-!!.id_column)
+  } else {
+    id_column_df <- input_data %>%
+      select(!!id)
+  }
+  # Separating the ID variable and address coordinates out into their own dataset
   addresses <- input_data %>%
     select(!!id, lat, lon)
-  # Separating the ID and any other columns that aren't coordinates (presumed to be event dates) out into their own dataset
+  # Separating the ID variable and any other columns that aren't coordinates (event dates) out into their own dataset
   event_dates <- input_data %>%
     select(-lat, -lon)
-  # If the ID column in addresses is equal to lat or lon (no ID column was supplied by the user) then creating an ID column in addresses and event_dates that is just the row number
-  if (sum(addresses %>% select(!!id) == addresses %>% select(lat), na.rm = TRUE) > 0 | sum(addresses %>% select(!!id) == addresses %>% select(lon), na.rm = TRUE) > 0) {
-    addresses <- addresses %>%
-      mutate(id = as.character(1:nrow(addresses))) %>%
-      relocate(id)
-    event_dates <- event_dates %>%
-      mutate(id = as.character(1:nrow(event_dates))) %>%
-      relocate(id)
-    id <- addresses %>%
-      select(id) %>%
-      colnames()
-  }
-  # Ensuring that the ID column is a character
-  tryCatch({
-    addresses <- addresses %>%
-      mutate(across(as.name(id), as.character))
-    event_dates <- event_dates %>%
-      mutate(across(as.name(id), as.character))
-  }, error = function(e) {
-    stop(call. = FALSE, 'Could not format ID variable as a string.')
-  }, warning = function(w) {
-    stop(call. = FALSE, 'Could not format ID variable as a string.')
-  })
-  # If any columns that are not the ID column are characters, then converting them to dates
+  # If any columns that are not the ID variable are characters, then removing anything after a space (any times included in dates)
+  event_dates <- event_dates %>%
+    mutate(across(where(is.character) & !as.name(id), ~str_remove_all(., " .*")))
+  # If any columns that are not the ID variable are characters, then converting them to dates
   tryCatch({
     event_dates <- event_dates %>%
       mutate(across(where(is.character) & !as.name(id), mdy))
@@ -129,7 +133,7 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
     stop(call. = FALSE, paste('Could not format user-supplied event dates as dates.',
                               'Please provide event dates as YYYY-MM-DD or MM/DD/YYYY.'))
   })
-  # If the only column in the event_dates dataset is the ID column (no event dates were supplied by the user), then filling in every single day between year_start and year_end
+  # If there is no date column(s) in the event_dates dataset (no event dates were supplied by the user), then filling in every single day between year_start and year_end
   if (.year_start > .year_end) {
     stop(call. = FALSE, 'Please ensure that year_start is less than or equal to year_end.')
   }
@@ -152,7 +156,7 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
   } else {
     year_end_date <- year_end_date + 364
   }
-  if (!FALSE %in% (colnames(event_dates) == id)) {
+  if (!"Date" %in% sapply(event_dates, class)) {
     date_range <- as.data.frame(matrix(rep(year_start_date:year_end_date, nrow(event_dates)), ncol = length(year_start_date:year_end_date), byrow = TRUE))
     names(date_range) <- c(paste0("date_", 1:ncol(date_range)))
     date_range <- date_range %>%
@@ -162,7 +166,7 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
   # Converting the input addresses to a SpatVector
   coords <- vect(addresses, geom = c("lon", "lat"), crs = "+proj=longlat +ellips=WGS84")
   # Returning a list of objects needed later
-  out <- list("id" = id, "addresses" = addresses, "event_dates" = event_dates, "year_start_date" = year_start_date, "year_end_date" = year_end_date, "coords" = coords)
+  out <- list("id" = id, "id_column_df" = id_column_df, "addresses" = addresses, "event_dates" = event_dates, "year_start_date" = year_start_date, "year_end_date" = year_end_date, "coords" = coords)
   return(out)
 }
 
@@ -318,7 +322,7 @@ daymet_select <- function(id_var, date_var, silent = FALSE, .template = template
       to_append <- rows_update(to_append, daymet_extract_output)
     }
   }, error = function(e) {
-    stop(call. = FALSE, paste('Could not complete Daymet data merge, user-supplied IDs must be unique.',
+    stop(call. = FALSE, paste('Could not complete Daymet data merge, ID variable must be unique.',
                               id_var, 'is not unique.'))
   }, warning = function(w) {
     print(w)
@@ -329,6 +333,7 @@ daymet_select <- function(id_var, date_var, silent = FALSE, .template = template
 # Importing and processing the input data
 import_data_out <- import_data()
 id <- import_data_out$id
+id_column_df <- import_data_out$id_column_df
 addresses <- import_data_out$addresses
 event_dates <- import_data_out$event_dates
 year_start_date <- import_data_out$year_start_date
@@ -400,7 +405,7 @@ event_dates$id_list <- map(event_dates$event_date_list, as.character)
 tryCatch({
   event_dates$id_list <- map2(event_dates$id_list, unlist(unname(as.vector(event_dates[as.character(id)]))), str_replace, pattern = ".*")
 }, error = function(e) {
-  stop(call. = FALSE, 'User-supplied IDs are entirely missing.')
+  stop(call. = FALSE, 'ID variable is entirely missing.')
 }, warning = function(w) {
   print(w)
 })
@@ -419,8 +424,20 @@ if (nrow(main_dataset) == 0 & ncol(main_dataset) == 0) {
 main_dataset <- main_dataset %>%
   filter(if_any(-c(!!id, date), ~ !is.na(.)))
 
-# Sorting and de-duplicating the final results (duplicates could have resulted from leap years)
-get_id <- id
+# Merging in the user-supplied ID column
+id_column_df <- as.data.table(id_column_df)
+main_dataset <- id_column_df[main_dataset, on = c(id = "id")]
+if (!is.na(id_column)) {
+  main_dataset <- main_dataset %>%
+    select(-!!id)
+}
+
+# Sorting and de-duplicating the final results (duplicates could have resulted from leap years or repeat event dates)
+if (!is.na(id_column)) {
+  get_id <- id_column
+} else {
+  get_id <- id
+}
 main_dataset <- main_dataset %>%
   mutate(sort1 = factor(get(get_id), ordered = TRUE, levels = unique(mixedsort(get(get_id)))),
          sort2 = factor(date, ordered = TRUE, levels = unique(mixedsort(date)))) %>%
@@ -430,7 +447,7 @@ main_dataset <- main_dataset %>%
 
 # Writing the results out as a CSV file
 csv_out <- paste0(unlist(str_split(csv_filename, ".csv"))[1], "_daymet", ".csv")
-write.csv(main_dataset, csv_out, na = "", row.names = FALSE)
+fwrite(main_dataset, csv_out, na = "", row.names = FALSE)
 
 # Deleting the NetCDF files that were downloaded from disk
 rm(list = ls(all.names = TRUE))
