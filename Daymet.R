@@ -126,7 +126,9 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
   # If any columns that are not the ID variable are characters, then converting them to dates
   tryCatch({
     event_dates <- event_dates %>%
-      mutate(across(where(is.character) & !as.name(id), mdy))
+      mutate(across(where(is.character) & !as.name(id) & where(~any(str_detect(., "/"))), mdy))
+    event_dates <- event_dates %>%
+      mutate(across(where(is.character) & !as.name(id) & where(~any(str_detect(., "-"))), ymd))
   }, error = function(e) {
     print(e)
   }, warning = function(w) {
@@ -156,7 +158,7 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
   } else {
     year_end_date <- year_end_date + 364
   }
-  if (!"Date" %in% sapply(event_dates, class)) {
+  if (!"Date" %in% unlist(sapply(event_dates, class))) {
     date_range <- as.data.frame(matrix(rep(year_start_date:year_end_date, nrow(event_dates)), ncol = length(year_start_date:year_end_date), byrow = TRUE))
     names(date_range) <- c(paste0("date_", 1:ncol(date_range)))
     date_range <- date_range %>%
