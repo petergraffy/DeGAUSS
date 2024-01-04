@@ -56,6 +56,15 @@ extra_columns <- set_options_out$extra_columns
 # leap years, have 1–365 days. For leap years, the Daymet data include leap day (February 29)
 # and December 31 is discarded from leap years to maintain a 365-day year.
 
+#### IF YOU HAVEN'T PREVIOUSLY INSTALLED ANY OF THE PACKAGES BELOW, THEN UN-COMMENT AND RUN THE RELEVANT CODE LINES ####
+#install.packages('daymetr')
+#install.packages('tidyverse')
+#install.packages('terra')
+#install.packages('gtools')
+#install.packages('data.table')
+#install.packages('remotes')
+#remotes::install_github('degauss-org/dht')
+
 # Loading necessary packages
 library(daymetr)
 library(tidyverse)
