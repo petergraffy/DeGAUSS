@@ -62,6 +62,9 @@ extra_columns <- set_options_out$extra_columns
 #install.packages('terra')
 #install.packages('gtools')
 #install.packages('data.table')
+#install.packages('future')
+#install.packages('future.apply')
+#install.packages('furrr')
 #install.packages('remotes')
 #remotes::install_github('degauss-org/dht')
 
@@ -71,6 +74,9 @@ library(tidyverse)
 library(terra)
 library(gtools)
 library(data.table)
+library(future)
+library(future.apply)
+library(furrr)
 library(dht)
 
 # Greeting users
@@ -187,7 +193,7 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
   } else {
     year_end_date <- year_end_date + 364
   }
-  if (!"Date" %in% unlist(sapply(event_dates, class))) {
+  if (!"Date" %in% unlist(future_sapply(event_dates, class))) {
     date_range <- as.data.frame(matrix(rep(year_start_date:year_end_date, nrow(event_dates)), ncol = length(year_start_date:year_end_date), byrow = TRUE))
     names(date_range) <- c(paste0("date_", 1:ncol(date_range)))
     date_range <- date_range %>%
@@ -342,7 +348,7 @@ daymet_select <- function(id_var, date_var, silent = FALSE, .template = template
       rename(!!dm_var := !!rename_variable_name)
     return(daymet_variable_df)
   }
-  daymet_extract_output <- map2_df(layers$dm_var, layers$multiplier, daymet_extract)
+  daymet_extract_output <- map2_dfr(layers$dm_var, layers$multiplier, daymet_extract)
   daymet_extract_output <- daymet_extract_output %>%
     fill(-!!.id, .direction = "downup") %>%
     distinct()
@@ -379,6 +385,10 @@ time_dict <- daymet_download_load_out$time_dict
 layer_dict <- daymet_download_load_out$layer_dict
 daymet_data <- daymet_download_load_out$daymet_data
 
+# Setting up parallel processing
+plan(multisession)
+set.seed(1)
+
 # Changing the coordinate reference system of the input addresses so they match that of Daymet
 new_crs <- crs(daymet_data, proj = TRUE)
 proj_coords <- project(coords, new_crs)
@@ -388,19 +398,19 @@ event_dates <- event_dates %>%
   filter(if_any(-!!id, ~ !is.na(.)))
 
 # Checking for any columns in event_dates that don't seem to be dates
-if (any(c("numeric", "integer", "logical", "complex") %in% unlist(sapply(event_dates, class)))) {
+if (any(c("numeric", "integer", "logical", "complex") %in% unlist(future_sapply(event_dates, class)))) {
   stop(call. = FALSE, paste('Ensure that input date is formatted as YYYY-MM-DD.',
                             'And/or, be sure to specify a user-supplied ID column, and/or extra columns.'))
 }
 
 # Combining all the event dates into a list
 event_dates <- event_dates %>%
-  mutate(event_date_list = pmap(select(., -!!id), c)) %>%
+  mutate(event_date_list = future_pmap(select(., -!!id), c)) %>%
   select(!!id, event_date_list)
-event_dates$event_date_list <- map(event_dates$event_date_list, unname)
-event_dates$event_date_list <- map(event_dates$event_date_list, na.omit)
+event_dates$event_date_list <- future_map(event_dates$event_date_list, unname)
+event_dates$event_date_list <- future_map(event_dates$event_date_list, na.omit)
 tryCatch({
-  event_dates$event_date_list <- map(event_dates$event_date_list, as_date)
+  event_dates$event_date_list <- future_map(event_dates$event_date_list, as_date)
 }, error = function(e) {
   print(e)
 }, warning = function(w) {
@@ -419,12 +429,12 @@ tryCatch({
 })
 if (lag > 0) {
   for (lag_step in 1:lag) {
-    new_dates <- map(event_dates$event_date_list, ~ .x - lag_step)
+    new_dates <- future_map(event_dates$event_date_list, ~ .x - lag_step)
     event_dates$new_dates <- new_dates
     if (lag_step == 1) {
-      event_dates$event_date_list_lag <- map2(event_dates$event_date_list, event_dates$new_dates, c)
+      event_dates$event_date_list_lag <- future_map2(event_dates$event_date_list, event_dates$new_dates, c)
     } else {
-      event_dates$event_date_list_lag <- map2(event_dates$event_date_list_lag, event_dates$new_dates, c)
+      event_dates$event_date_list_lag <- future_map2(event_dates$event_date_list_lag, event_dates$new_dates, c)
     }
     event_dates <- event_dates %>%
       select(-new_dates)
@@ -435,13 +445,13 @@ if (lag > 0) {
 }
 
 # Sorting each event date list, and removing duplicates
-event_dates$event_date_list <- map(event_dates$event_date_list, sort)
-event_dates$event_date_list <- map(event_dates$event_date_list, unique)
+event_dates$event_date_list <- future_map(event_dates$event_date_list, sort)
+event_dates$event_date_list <- future_map(event_dates$event_date_list, unique)
 
 # Extending each ID to be a list of length equal to the event date list
-event_dates$id_list <- map(event_dates$event_date_list, as.character)
+event_dates$id_list <- future_map(event_dates$event_date_list, as.character)
 tryCatch({
-  event_dates$id_list <- map2(event_dates$id_list, unlist(unname(as.vector(event_dates[as.character(id)]))), str_replace, pattern = ".*")
+  event_dates$id_list <- future_map2(event_dates$id_list, unlist(unname(as.vector(event_dates[as.character(id)]))), str_replace, pattern = ".*")
 }, error = function(e) {
   stop(call. = FALSE, 'ID variable is entirely missing.')
 }, warning = function(w) {
