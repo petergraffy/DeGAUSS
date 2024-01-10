@@ -56,28 +56,20 @@ extra_columns <- set_options_out$extra_columns
 # leap years, have 1–365 days. For leap years, the Daymet data include leap day (February 29)
 # and December 31 is discarded from leap years to maintain a 365-day year.
 
-#### IF YOU HAVEN'T PREVIOUSLY INSTALLED ANY OF THE PACKAGES BELOW, THEN UN-COMMENT AND RUN THE RELEVANT CODE LINES ####
-#install.packages('daymetr')
-#install.packages('tidyverse')
-#install.packages('terra')
-#install.packages('gtools')
-#install.packages('data.table')
-#install.packages('future')
-#install.packages('future.apply')
-#install.packages('furrr')
-#install.packages('remotes')
+#### IF YOU HAVEN'T PREVIOUSLY INSTALLED DEGAUSS, THEN UN-COMMENT AND RUN THE INSTALL CODE LINE ####
 #remotes::install_github('degauss-org/dht')
 
-# Loading necessary packages
-library(daymetr)
-library(tidyverse)
-library(terra)
-library(gtools)
-library(data.table)
-library(future)
-library(future.apply)
-library(furrr)
-library(dht)
+usePackage <- function(p) {
+  if (!is.element(p, installed.packages()[,1]))
+    install.packages(p, dep = TRUE)
+  require(p, character.only = TRUE)
+}
+
+listPackages<-c('daymetr', 'tidyverse', 'terra', 'gtools', 
+                'data.table', 'future', 'future.apply', 'remotes')
+
+sapply(listPackages, usePackage)
+
 
 # Greeting users
 greeting()
