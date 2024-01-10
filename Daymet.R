@@ -459,7 +459,7 @@ tryCatch({
 })
 
 # Linking the Daymet data coordinates to the input address coordinates across all event dates
-daymet_select_output <- map2(unlist(event_dates$id_list), unlist(event_dates$event_date_list), daymet_select, silent = TRUE)
+daymet_select_output <- map2(unlist(event_dates$id_list), unlist(event_dates$event_date_list), daymet_select, silent = TRUE, .progress = list(name = "Linking Daymet Data", type = "iterator", format = "{cli::pb_name} {cli::pb_bar} {cli::pb_percent} | ETA: {cli::pb_eta}", clear = TRUE))
 daymet_select_output <- daymet_select_output[!is.na(daymet_select_output)]
 main_dataset <- rbindlist(daymet_select_output)
 
