@@ -65,6 +65,7 @@ extra_columns <- set_options_out$extra_columns
 #install.packages('future')
 #install.packages('future.apply')
 #install.packages('furrr')
+#install.packages('progressr')
 #install.packages('remotes')
 #remotes::install_github('degauss-org/dht')
 
@@ -77,6 +78,7 @@ library(data.table)
 library(future)
 library(future.apply)
 library(furrr)
+library(progressr)
 library(dht)
 
 # Greeting users
@@ -385,9 +387,10 @@ time_dict <- daymet_download_load_out$time_dict
 layer_dict <- daymet_download_load_out$layer_dict
 daymet_data <- daymet_download_load_out$daymet_data
 
-# Setting up parallel processing
+# Setting up parallel processing and progress bar reporting
 plan(multisession)
 set.seed(1)
+handlers("cli")
 
 # Changing the coordinate reference system of the input addresses so they match that of Daymet
 new_crs <- crs(daymet_data, proj = TRUE)
@@ -428,17 +431,21 @@ tryCatch({
   print(w)
 })
 if (lag > 0) {
-  for (lag_step in 1:lag) {
-    new_dates <- future_map(event_dates$event_date_list, ~ .x - lag_step)
-    event_dates$new_dates <- new_dates
-    if (lag_step == 1) {
-      event_dates$event_date_list_lag <- future_map2(event_dates$event_date_list, event_dates$new_dates, c)
-    } else {
-      event_dates$event_date_list_lag <- future_map2(event_dates$event_date_list_lag, event_dates$new_dates, c)
+  with_progress({
+    p <- progressor(steps = lag, message = "Lagging Dates")
+    for (lag_step in 1:lag) {
+      new_dates <- future_map(event_dates$event_date_list, ~ .x - lag_step)
+      event_dates$new_dates <- new_dates
+      if (lag_step == 1) {
+        event_dates$event_date_list_lag <- future_map2(event_dates$event_date_list, event_dates$new_dates, c)
+      } else {
+        event_dates$event_date_list_lag <- future_map2(event_dates$event_date_list_lag, event_dates$new_dates, c)
+      }
+      event_dates <- event_dates %>%
+        select(-new_dates)
+      p()
     }
-    event_dates <- event_dates %>%
-      select(-new_dates)
-  }
+  })
   event_dates <- event_dates %>%
     select(-event_date_list) %>%
     rename(event_date_list = event_date_list_lag)
