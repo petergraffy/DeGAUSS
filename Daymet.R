@@ -255,7 +255,7 @@ daymet_download_load <- function(.min_lon = min_lon, .max_lon = max_lon, .min_la
                          force = TRUE,
                          path = getwd())
     template_colnames[[length(template_colnames) + 1]] <- variable
-    Sys.sleep(1) # Pausing download of Daymet data for 1 second to help avoid placing too many requests at once
+    Sys.sleep(5) # Pausing download of Daymet data for 5 seconds to help avoid placing too many requests at once
   }
   template <- as.data.table(matrix(nrow = 0, ncol = length(template_colnames)))
   colnames(template) <- template_colnames
