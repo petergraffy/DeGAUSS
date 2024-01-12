@@ -245,17 +245,19 @@ daymet_download_load <- function(.min_lon = min_lon, .max_lon = max_lon, .min_la
   .daymet_variables <- str_remove(.daymet_variables, " ")
   .daymet_variables <- str_split(.daymet_variables, ",", simplify = TRUE)
   for (variable in .daymet_variables) {
-    download_daymet_ncss(location = c(.max_lat, .min_lon, .min_lat, .max_lon), # Bounding box defined as top left / bottom right pair c(lat, lon, lat, lon)
-                         start = .year_start,
-                         end = .year_end,
-                         param = variable,
-                         frequency = "daily",
-                         mosaic = .region,
-                         silent = FALSE,
-                         force = TRUE,
-                         path = getwd())
+    for (year in .year_start:.year_end) {
+      download_daymet_ncss(location = c(.max_lat, .min_lon, .min_lat, .max_lon), # Bounding box defined as top left / bottom right pair c(lat, lon, lat, lon)
+                          start = year,
+                          end = year,
+                          param = variable,
+                          frequency = "daily",
+                          mosaic = .region,
+                          silent = FALSE,
+                          force = TRUE,
+                          path = getwd())
+      Sys.sleep(30) # Pausing download of Daymet data for 30 seconds to help avoid placing too many requests at once
+    }
     template_colnames[[length(template_colnames) + 1]] <- variable
-    Sys.sleep(30) # Pausing download of Daymet data for 30 seconds to help avoid placing too many requests at once
   }
   template <- as.data.table(matrix(nrow = 0, ncol = length(template_colnames)))
   colnames(template) <- template_colnames
