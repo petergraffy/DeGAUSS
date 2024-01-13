@@ -87,7 +87,7 @@ greeting()
 
 # Writing functions
 # Creating function to import and process the input addresses and optionally event dates, a user-supplied ID column, and/or extra columns
-import_data <- function(.csv_filename = csv_filename, .year_start = year_start, .year_end = year_end, .id_column = id_column, .extra_columns = extra_columns) {
+import_data <- function(.csv_filename = csv_filename, .min_lon = min_lon, .max_lon = max_lon, .min_lat = min_lat, .max_lat = max_lat, .year_start = year_start, .year_end = year_end, .lag = lag, .id_column = id_column, .extra_columns = extra_columns) {
   # Checking that the input data is a CSV file
   if (!str_detect(.csv_filename, ".csv$")) {
     stop(call. = FALSE, 'Input file must be a CSV.')
@@ -122,6 +122,36 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
   # Filtering out rows in the input data where lat or lon are missing
   input_data <- input_data %>%
     filter(!is.na(lat) & !is.na(lon))
+  # Throwing an error if no observations are remaining
+  if (nrow(input_data) == 0) {
+    stop(call. = FALSE, 'Zero observations where lat and lon are not missing.')
+  }
+  # Verifying that if the user supplied bounding box coordinates, they consist of numeric coordinates
+  if (!(.min_lon == 0 & .max_lon == 0 & .min_lat == 0 & .max_lat == 0)) {
+    if (!is.numeric(.min_lon) | !is.numeric(.max_lon) | !is.numeric(.min_lat) | !is.numeric(.max_lat)) {
+      stop(call. = FALSE, 'Please ensure that user-supplied Daymet bounding box has coordinates in numeric decimal degrees.')
+    }
+  }
+  # Verifying that if the user supplied bounding box coordinates, the minimum coordinates are less than the maximum coordinates
+  if (!(.min_lon == 0 & .max_lon == 0 & .min_lat == 0 & .max_lat == 0)) {
+    if (!(.min_lon < .max_lon)) {
+      stop(call. = FALSE, paste0('Please ensure that bounding box min_lon: ', .min_lon,
+                                 ' is less than bounding box max_lon: ', .max_lon, '.'))
+    }
+    if (!(.min_lat < .max_lat)) {
+      stop(call. = FALSE, paste0('Please ensure that bounding box min_lat: ', .min_lat,
+                                 ' is less than bounding box max_lat: ', .max_lat, '.'))
+    }
+  }
+  # If the user supplied bounding box coordinates, then removing observations where the address is outside of the bounding box of Daymet data
+  if (!(.min_lon == 0 & .max_lon == 0 & .min_lat == 0 & .max_lat == 0)) {
+    input_data <- input_data %>%
+      filter(lat >= .min_lat & lat <= .max_lat & lon >= .min_lon & lon <= .max_lon)
+  }
+  # Throwing an error if no observations are remaining
+  if (nrow(input_data) == 0) {
+    stop(call. = FALSE, 'Zero observations where the lat and lon coordinates are within the user-supplied bounding box of Daymet data.')
+  }
   # Separating the ID variable and user-supplied ID column out into their own dataset (will just be the ID variable if no user-supplied ID column was given)
   if (!(!!.id_column %in% colnames(input_data)) & !is.na(.id_column)) {
     stop(call. = FALSE, 'User-supplied ID column not in input file.')
@@ -161,12 +191,22 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
   # If any columns that are not the ID variable are characters, then removing anything after a space (any times included in dates)
   event_dates <- event_dates %>%
     mutate(across(where(is.character) & !as.name(id), ~str_remove_all(., " .*")))
+  # Filtering out any rows in event_dates where the event dates are all missing
+  event_dates <- event_dates %>%
+    filter(if_any(-!!id, ~ !is.na(.)))
+  # Throwing an error if no observations are remaining
+  if (nrow(event_dates) == 0) {
+    stop(call. = FALSE, 'Zero observations where the user-supplied event dates are not entirely missing.')
+  }
+  # Removing any columns in event_dates where everything is NA
+  event_dates <- event_dates %>%
+    select_if(~ !all(is.na(.)))
   # If any columns that are not the ID variable are characters, then converting them to dates
   tryCatch({
     event_dates <- event_dates %>%
-      mutate(across(where(is.character) & !as.name(id) & where(~any(str_detect(., "/"))), mdy))
+      mutate(across(where(is.character) & !as.name(id) & where(~any(str_detect(., "/") & !is.na(.))), mdy))
     event_dates <- event_dates %>%
-      mutate(across(where(is.character) & !as.name(id) & where(~any(str_detect(., "-"))), ymd))
+      mutate(across(where(is.character) & !as.name(id) & where(~any(str_detect(., "-") & !is.na(.))), ymd))
   }, error = function(e) {
     print(e)
   }, warning = function(w) {
@@ -196,13 +236,48 @@ import_data <- function(.csv_filename = csv_filename, .year_start = year_start, 
   } else {
     year_end_date <- year_end_date + 364
   }
-  if (!"Date" %in% unlist(future_sapply(event_dates, class))) {
+  if (!"Date" %in% unlist(sapply(event_dates, class))) {
     date_range <- as.data.frame(matrix(rep(year_start_date:year_end_date, nrow(event_dates)), ncol = length(year_start_date:year_end_date), byrow = TRUE))
     names(date_range) <- c(paste0("date_", 1:ncol(date_range)))
     date_range <- date_range %>%
       mutate_all(as_date)
     event_dates <- cbind(event_dates, date_range)
   }
+  # Checking for any columns in event_dates that don't seem to be dates
+  if (any(c("numeric", "integer", "logical", "complex") %in% unlist(sapply(event_dates, class)))) {
+    stop(call. = FALSE, paste('Please ensure that provided event dates are formatted as YYYY-MM-DD or MM/DD/YYYY.',
+                              'And/or, be sure to specify a user-supplied ID column, and/or extra columns, if applicable.'))
+  }
+  # Filtering out any rows in event_dates where the event dates are all before the date range of Daymet data to be loaded
+  event_dates <- event_dates %>%
+    filter(if_any(-!!id, ~ !(. < year_start_date)))
+  # Throwing an error if no observations are remaining
+  if (nrow(event_dates) == 0) {
+    stop(call. = FALSE, 'Zero observations where the event dates are within or after the start year of Daymet data to be loaded.')
+  }
+  # Filtering out any rows in event_dates where all of the lagged event dates are after the date range of Daymet data to be loaded
+  tryCatch({
+    if (!(.lag %% 1 == 0) | is.logical(.lag)) {
+      stop(call. = FALSE)
+    }
+  }, error = function(e) {
+    stop(call. = FALSE, 'Ensure that user-supplied lag is a numeric whole number.')
+  }, warning = function(w) {
+    print(w)
+  })
+  event_dates <- event_dates %>%
+    filter(if_any(-!!id, ~ !(as_date(.) - .lag > year_end_date)))
+  # Throwing an error if no observations are remaining
+  if (nrow(event_dates) == 0) {
+    stop(call. = FALSE, 'Zero observations where the lagged event dates are within or before the end year of Daymet data to be loaded.')
+  }
+  # Removing observations from id_column_df, extra_columns_df, and addresses that were also removed from event_dates
+  id_column_df <- id_column_df %>%
+    filter(id %in% event_dates$id)
+  extra_columns_df <- extra_columns_df %>%
+    filter(id %in% event_dates$id)
+  addresses <- addresses %>%
+    filter(id %in% event_dates$id)
   # Converting the input addresses to a SpatVector
   coords <- vect(addresses, geom = c("lon", "lat"), crs = "+proj=longlat +ellips=WGS84")
   # Returning a list of objects needed later
@@ -226,19 +301,6 @@ daymet_download_load <- function(.min_lon = min_lon, .max_lon = max_lon, .min_la
     .max_lon <- .max_lon + noise[2]
     .min_lat <- .min_lat - noise[3]
     .max_lat <- .max_lat + noise[4]
-  }
-  # Otherwise, verifying that the user-supplied bounding box consists of numeric coordinates
-  if (!is.numeric(.min_lon) | !is.numeric(.max_lon) | !is.numeric(.min_lat) | !is.numeric(.max_lat)) {
-    stop(call. = FALSE, 'Please ensure that user-supplied Daymet bounding box has coordinates in numeric decimal degrees.')
-  }
-  # Additionally verifying that for user-supplied bounding box coordinates, the minimum coordinates are less than the maximum coordinates
-  if (!(.min_lon < .max_lon)) {
-    stop(call. = FALSE, paste0('Please ensure that bounding box min_lon: ', .min_lon,
-                              ' is less than bounding box max_lon: ', .max_lon, '.'))
-  }
-  if (!(.min_lat < .max_lat)) {
-    stop(call. = FALSE, paste0('Please ensure that bounding box min_lat: ', .min_lat,
-                               ' is less than bounding box max_lat: ', .max_lat, '.'))
   }
   # Downloading the Daymet NetCDF data defined by the coordinate bounding box: One file per variable per year
   # Additionally creating a template to link all Daymet data to - new observations will all be appended (vertical dataset)
@@ -400,16 +462,6 @@ handlers("cli")
 new_crs <- crs(daymet_data, proj = TRUE)
 proj_coords <- project(coords, new_crs)
 
-# Filtering out any rows in event_dates where the event dates are all missing
-event_dates <- event_dates %>%
-  filter(if_any(-!!id, ~ !is.na(.)))
-
-# Checking for any columns in event_dates that don't seem to be dates
-if (any(c("numeric", "integer", "logical", "complex") %in% unlist(future_sapply(event_dates, class)))) {
-  stop(call. = FALSE, paste('Ensure that input date is formatted as YYYY-MM-DD.',
-                            'And/or, be sure to specify a user-supplied ID column, and/or extra columns.'))
-}
-
 # Combining all the event dates into a list
 event_dates <- event_dates %>%
   mutate(event_date_list = future_pmap(select(., -!!id), c)) %>%
@@ -425,15 +477,6 @@ tryCatch({
 })
 
 # For each event date list, adding in new dates that correspond to the specified lag
-tryCatch({
-  if (!(lag %% 1 == 0) | is.logical(lag)) {
-    stop(call. = FALSE)
-  }
-}, error = function(e) {
-  stop(call. = FALSE, 'Ensure that user-supplied lag is a numeric whole number.')
-}, warning = function(w) {
-  print(w)
-})
 if (lag > 0) {
   with_progress({
     p <- progressor(steps = lag, message = "Lagging Dates")
@@ -474,14 +517,10 @@ daymet_select_output <- map2(unlist(event_dates$id_list), unlist(event_dates$eve
 daymet_select_output <- daymet_select_output[!is.na(daymet_select_output)]
 main_dataset <- rbindlist(daymet_select_output)
 
-# Handling cases where none of the event dates were within the date range of loaded Daymet data
+# Handling cases where none of the event dates or their lags were within the date range of loaded Daymet data
 if (nrow(main_dataset) == 0 & ncol(main_dataset) == 0) {
   main_dataset <- template
 }
-
-# Handling cases where an address was outside of the bounding box of loaded Daymet data
-main_dataset <- main_dataset %>%
-  filter(if_any(-c(!!id, date), ~ !is.na(.)))
 
 # Merging in the extra columns
 extra_columns_df <- as.data.table(extra_columns_df)
