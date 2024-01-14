@@ -366,7 +366,7 @@ daymet_download_load <- function(.min_lon = min_lon, .max_lon = max_lon, .min_la
 }
 
 # Creating function to link the Daymet data coordinates to the input address coordinates for a specified ID and specified date
-daymet_select <- function(id_var, date_var, silent = FALSE, .template = template, .year_start_date = year_start_date, .year_end_date = year_end_date, .id = id, .time_dict = time_dict, .layer_dict = layer_dict, .daymet_data = daymet_data, .proj_coords = proj_coords) {
+daymet_select <- function(id_var, date_var, silent = FALSE, .template = template, .year_start_date = year_start_date, .year_end_date = year_end_date, .id = id, .time_dict = time_dict, .layer_dict = layer_dict, .daymet_data = daymet_data, .proj_coords = proj_coords, .daymet_variables = daymet_variables) {
   # Resetting the data to append with the output data template
   to_append <- .template
   # If the specified date is beyond the Daymet data available, then breaking out of the function
@@ -375,7 +375,7 @@ daymet_select <- function(id_var, date_var, silent = FALSE, .template = template
   }, error = function(e) {
     print(e)
   }, warning = function(w) {
-    stop(call. = FALSE, 'Ensure that input date is formatted as YYYY-MM-DD.')
+    stop(call. = FALSE, 'Ensure that input date is formatted as YYYY-MM-DD or MM/DD/YYYY.')
   })
   if (date_var < .year_start_date | date_var > .year_end_date) {
     return(NA)
@@ -417,8 +417,11 @@ daymet_select <- function(id_var, date_var, silent = FALSE, .template = template
     return(daymet_variable_df)
   }
   daymet_extract_output <- map2_dfr(layers$dm_var, layers$multiplier, daymet_extract)
+  .daymet_variables <- str_remove(.daymet_variables, " ")
+  .daymet_variables <- str_split(.daymet_variables, ",", simplify = TRUE)
   daymet_extract_output <- daymet_extract_output %>%
     fill(-!!.id, .direction = "downup") %>%
+    mutate(across(where(is.numeric) & matches(.daymet_variables), ~ round(., 2))) %>%
     distinct()
   tryCatch({
     if (silent == TRUE) {
@@ -473,7 +476,7 @@ tryCatch({
 }, error = function(e) {
   print(e)
 }, warning = function(w) {
-  stop(call. = FALSE, 'Ensure that input date is formatted as YYYY-MM-DD.')
+  stop(call. = FALSE, 'Ensure that input date is formatted as YYYY-MM-DD or MM/DD/YYYY.')
 })
 
 # For each event date list, adding in new dates that correspond to the specified lag
