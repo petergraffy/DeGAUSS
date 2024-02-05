@@ -2,6 +2,9 @@
 library(daymetr)
 library(terra)
 library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
 
 # Downloading the Daymet NetCDF
 download_daymet_ncss(location = c(42.154247, -88.263390, 41.470117, -87.525706), # Bounding box defined as top left / bottom right pair c(lat, lon, lat, lon)
@@ -97,8 +100,3 @@ long_day <- daymet_data_df %>%
   filter(date <= year_end) %>%                                                            # cuts off any dates after year_end just in case
   mutate(date = as.Date(date)) %>%
   select(cell, date, tmax)                                                                # convert to date and drop the day var to keep what we want
-
-
-
-
-
