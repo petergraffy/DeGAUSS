@@ -281,7 +281,7 @@ import_data <- function(.csv_filename = csv_filename, .min_lon = min_lon, .max_l
   # Converting the input addresses to a SpatVector
   coords <- vect(addresses, geom = c("lon", "lat"), crs = "+proj=longlat +ellips=WGS84")
   # Returning a list of objects needed later
-  out <- list("id" = id, "id_column_df" = id_column_df, "extra_columns_df" = extra_columns_df, "addresses" = addresses, "event_dates" = event_dates, "year_start_date" = year_start_date, "year_end_date" = year_end_date, "coords" = coords)
+  out <- list("id" = id, "id_column_df" = id_column_df, "extra_columns_df" = extra_columns_df, "addresses" = addresses, "event_dates" = event_dates, "coords" = coords)
   return(out)
 }
 
@@ -303,8 +303,6 @@ daymet_download_load <- function(.min_lon = min_lon, .max_lon = max_lon, .min_la
     .max_lat <- .max_lat + noise[4]
   }
   # Downloading the Daymet NetCDF data defined by the coordinate bounding box: One file per variable per year
-  # Additionally creating a template to link all Daymet data to - new observations will all be appended (vertical dataset)
-  template_colnames <- c(.id, "date")
   .daymet_variables <- str_remove(.daymet_variables, " ")
   .daymet_variables <- str_split(.daymet_variables, ",", simplify = TRUE)
   for (variable in .daymet_variables) {
@@ -320,122 +318,46 @@ daymet_download_load <- function(.min_lon = min_lon, .max_lon = max_lon, .min_la
                           path = getwd())
       Sys.sleep(30) # Pausing download of Daymet data for 30 seconds to help avoid placing too many requests at once
     }
-    template_colnames[[length(template_colnames) + 1]] <- variable
   }
-  template <- as.data.table(matrix(nrow = 0, ncol = length(template_colnames)))
-  colnames(template) <- template_colnames
-  template <- rbindlist(list(template, list(NA)), fill = TRUE)
-  template <- template %>%
-    mutate_if(is.logical, as.numeric)
   # Loading the NetCDF files downloaded from Daymet as a SpatRaster raster stack
   netcdf_list <- list.files(pattern = "_ncss.nc$")
   # Checking for extra NetCDF files
   if (length(netcdf_list) > (length(seq(.year_start, .year_end)) * length(.daymet_variables))) {
     stop(call. = FALSE, 'Ensure that there are not extra NetCDF files in folder where Daymet data was downloaded to.')
   }
-  # Initializing a time and layer dictionary
+  # Initializing a time dictionary
   time_dict <- tibble(number = 1:365)
-  layer_dict_colnames <- c("dm_var", "yr", "multiplier")
-  layer_dict <- as_tibble(matrix(nrow = length(netcdf_list), ncol = length(layer_dict_colnames)), .name_repair = ~ layer_dict_colnames)
   for (i in 1:length(netcdf_list)) {
-    daymet_load <- rast(netcdf_list[i])
-    # Extracting the year and Daymet variable from the file loaded in
+    # Extracting the year and Daymet variable from the file to be loaded in
     yr <- str_extract(netcdf_list[i], "[0-9]{4}")
     dm_var <- unlist(str_split(netcdf_list[i], "_"))[1]
+    # Creating a vector of layer names
+    layer_names <- as.character(1:365)
+    layer_names <- paste0(dm_var, "_", layer_names, "_", yr)
+    # Loading the Daymet data
+    daymet_load <- rast(netcdf_list[i])
+    names(daymet_load) <- layer_names
     # Creating a dictionary to link numbers 1–365 to a date in a year (time dictionary)
     origin <- as_date(paste0(yr, "-01-01")) - 1 # Numbers count days since origin
-    new_date_col <- paste0("date_", yr)
-    if (!new_date_col %in% colnames(time_dict)) {
-      time_dict <- time_dict %>%
-        mutate(!!new_date_col := as_date(number, origin = origin))
-    }
-    # Creating a dictionary to assign a multiplier for identifying different layers in the raster stack (layer dictionary)
-    layer_dict$dm_var[i] <- dm_var
-    layer_dict$yr[i] <- yr
-    layer_dict$multiplier[i] <- i - 1
-    # Stacking the Daymet data rasters
+    time_dict <- time_dict %>%
+      mutate(year = yr,
+             date := as_date(number, origin = origin))
+    # Stacking the Daymet data rasters and time dictionary
     if (i == 1) {
       daymet_data <- daymet_load
+      time_dictionary <- time_dict
     } else {
       daymet_data <- c(daymet_data, daymet_load)
+      time_dictionary <- rbind(time_dictionary, time_dict)
     }
   }
-  # Returning a list of objects needed later
-  out <- list("template" = template, "time_dict" = time_dict, "layer_dict" = layer_dict, "daymet_data" = daymet_data)
-  return(out)
-}
-
-# Creating function to link the Daymet data coordinates to the input address coordinates for a specified ID and specified date
-daymet_select <- function(id_var, date_var, silent = FALSE, .template = template, .year_start_date = year_start_date, .year_end_date = year_end_date, .id = id, .time_dict = time_dict, .layer_dict = layer_dict, .daymet_data = daymet_data, .proj_coords = proj_coords, .daymet_variables = daymet_variables) {
-  # Resetting the data to append with the output data template
-  to_append <- .template
-  # If the specified date is beyond the Daymet data available, then breaking out of the function
-  tryCatch({
-    date_var <- as_date(date_var)
-  }, error = function(e) {
-    print(e)
-  }, warning = function(w) {
-    stop(call. = FALSE, 'Ensure that input date is formatted as YYYY-MM-DD or MM/DD/YYYY.')
-  })
-  if (date_var < .year_start_date | date_var > .year_end_date) {
-    return(NA)
-  }
-  # Taking care of leap years, per Daymet conventions (12/31 is switched to 12/30)
-  if (leap_year(date_var) & month(date_var) == 12 & day(date_var) == 31) {
-    date_var <- date_var - 1
-  }
-  # Filling in the data to append with the ID and date
-  tryCatch({
-    id_var <- as.character(id_var)
-  }, error = function(e) {
-    stop(call. = FALSE, 'Could not format ID variable as a string.')
-  }, warning = function(w) {
-    stop(call. = FALSE, 'Could not format ID variable as a string.')
-  })
-  to_append <- to_append %>%
-    mutate(!!.id := !!id_var,
-           date := !!date_var)
-  # Looking up the number for the specified date in the time dictionary
-  time_dict_col <- paste0("date_", year(date_var))
-  date_num <- .time_dict %>%
-    filter(get(time_dict_col) == date_var) %>%
-    select(number) %>%
-    pull
-  # Extracting the Daymet data for the specified ID and specified date
-  layers <- .layer_dict %>%
-    filter(yr == year(date_var))
-  daymet_extract <- function(dm_var, multiplier) {
-    date_num_subset <- date_num + (365 * multiplier)
-    daymet_linked <- terra::extract(subset(.daymet_data, date_num_subset),
-                                    subset(.proj_coords, .proj_coords[[names(.proj_coords)]] == id_var),
-                                    bind = TRUE)
-    daymet_variable_df <- as.data.frame(daymet_linked)
-    # Renaming the Daymet data that was just added and joining it to the data to append
-    rename_variable_name <- paste0(dm_var, "_", date_num)
-    daymet_variable_df <- daymet_variable_df %>%
-      rename(!!dm_var := !!rename_variable_name)
-    return(daymet_variable_df)
-  }
-  daymet_extract_output <- map2_dfr(layers$dm_var, layers$multiplier, daymet_extract)
-  .daymet_variables <- str_remove(.daymet_variables, " ")
-  .daymet_variables <- str_split(.daymet_variables, ",", simplify = TRUE)
-  daymet_extract_output <- daymet_extract_output %>%
-    fill(-!!.id, .direction = "downup") %>%
-    mutate(across(where(is.numeric) & matches(.daymet_variables), ~ round(., 2))) %>%
+  time_dictionary <- time_dictionary %>%
+    arrange(number, year) %>%
     distinct()
-  tryCatch({
-    if (silent == TRUE) {
-      to_append <- suppressMessages(rows_update(to_append, daymet_extract_output))
-    } else {
-      to_append <- rows_update(to_append, daymet_extract_output)
-    }
-  }, error = function(e) {
-    stop(call. = FALSE, paste('Could not complete Daymet data merge, ID variable must be unique.',
-                              id_var, 'is not unique.'))
-  }, warning = function(w) {
-    print(w)
-  })
-  return(to_append)
+  time_dictionary <- as.data.table(time_dictionary)
+  # Returning a list of objects needed later
+  out <- list("time_dictionary" = time_dictionary, "daymet_data" = daymet_data)
+  return(out)
 }
 
 # Importing and processing the input data
@@ -445,15 +367,11 @@ id_column_df <- import_data_out$id_column_df
 extra_columns_df <- import_data_out$extra_columns_df
 addresses <- import_data_out$addresses
 event_dates <- import_data_out$event_dates
-year_start_date <- import_data_out$year_start_date
-year_end_date <- import_data_out$year_end_date
 coords <- import_data_out$coords
 
 # Downloading and loading the Daymet NetCDF data
 daymet_download_load_out <- daymet_download_load()
-template <- daymet_download_load_out$template
-time_dict <- daymet_download_load_out$time_dict
-layer_dict <- daymet_download_load_out$layer_dict
+time_dictionary <- daymet_download_load_out$time_dictionary
 daymet_data <- daymet_download_load_out$daymet_data
 
 # Setting up parallel processing and progress bar reporting
@@ -464,6 +382,19 @@ handlers("cli")
 # Changing the coordinate reference system of the input addresses so they match that of Daymet
 new_crs <- crs(daymet_data, proj = TRUE)
 proj_coords <- project(coords, new_crs)
+
+# Finding the Daymet raster cell numbers that match the input address coordinates
+addresses <- addresses %>%
+  mutate(cell = unname(cells(daymet_data, proj_coords)[, "cell"]))
+
+# Removing any input address observations where the Daymet cell raster number is missing
+addresses <- addresses %>%
+  filter(!is.na(cell))
+
+# Throwing an error if no observations are remaining
+if (nrow(addresses) == 0) {
+  stop(call. = FALSE, 'Zero observations where the input address coordinates fell within Daymet raster cells.')
+}
 
 # Combining all the event dates into a list
 event_dates <- event_dates %>%
@@ -505,25 +436,70 @@ if (lag > 0) {
 event_dates$event_date_list <- future_map(event_dates$event_date_list, sort)
 event_dates$event_date_list <- future_map(event_dates$event_date_list, unique)
 
-# Extending each ID to be a list of length equal to the event date list
-event_dates$id_list <- future_map(event_dates$event_date_list, as.character)
-tryCatch({
-  event_dates$id_list <- future_map2(event_dates$id_list, unlist(unname(as.vector(event_dates[as.character(id)]))), str_replace, pattern = ".*")
-}, error = function(e) {
-  stop(call. = FALSE, 'ID variable is entirely missing.')
-}, warning = function(w) {
-  print(w)
-})
+# Expanding the event date list column to be a separate row for each entry
+event_dates <- unnest(event_dates, event_date_list)
 
-# Linking the Daymet data coordinates to the input address coordinates across all event dates
-daymet_select_output <- map2(unlist(event_dates$id_list), unlist(event_dates$event_date_list), daymet_select, silent = TRUE, .progress = list(name = "Linking Daymet Data", type = "iterator", format = "{cli::pb_name} {cli::pb_bar} {cli::pb_percent} | ETA: {cli::pb_eta}", clear = TRUE))
-daymet_select_output <- daymet_select_output[!is.na(daymet_select_output)]
-main_dataset <- rbindlist(daymet_select_output)
+# Merging event_dates and addresses
+event_dates <- event_dates %>%
+  rename(date = event_date_list)
+addresses <- addresses %>%
+  select(-c(lat, lon))
+event_dates <- as.data.table(event_dates)
+addresses <- as.data.table(addresses)
+addresses <- addresses[event_dates, on = c(id = "id")]
 
-# Handling cases where none of the event dates or their lags were within the date range of loaded Daymet data
-if (nrow(main_dataset) == 0 & ncol(main_dataset) == 0) {
-  main_dataset <- template
+# Taking care of leap years, per Daymet conventions (12/31 is switched to 12/30)
+addresses$date <- if_else(leap_year(addresses$date) & month(addresses$date) == 12 & day(addresses$date) == 31,
+                          addresses$date - 1,
+                          addresses$date)
+
+# Converting the Daymet SpatRaster raster stack to a data table, with cell numbers
+daymet_data_dt <- as.data.frame(daymet_data, cells = TRUE)
+daymet_data_dt <- as.data.table(daymet_data_dt)
+
+# Transposing the Daymet data table, one Daymet variable at a time
+transpose_daymet <- function(.daymet_data_dt = daymet_data_dt, dm_var) {
+  daymet_data_dt_var <- .daymet_data_dt %>%
+    select(c("cell", starts_with(dm_var)))
+  daymet_data_dt_var <- melt(daymet_data_dt_var, id.vars = "cell", variable.name = "number_year", value.name = dm_var)
+  daymet_data_dt_var <- daymet_data_dt_var %>%
+    mutate(number_year = str_remove_all(number_year, paste0(dm_var, "_")))
+  return(daymet_data_dt_var)
 }
+daymet_variables <- str_remove(daymet_variables, " ")
+daymet_variables <- str_split(daymet_variables, ",", simplify = TRUE)
+for (i in 1:length(daymet_variables)) {
+  if (i == 1) {
+    daymet_data_long <- transpose_daymet(dm_var = daymet_variables[i])
+  }
+  else {
+    daymet_data_long_merge <- transpose_daymet(dm_var = daymet_variables[i])
+    daymet_data_long <- daymet_data_long[daymet_data_long_merge, on = c(cell = "cell", number_year = "number_year")]
+  }
+}
+
+# Rounding the Daymet variables to two decimal places
+daymet_data_long <- daymet_data_long %>%
+  mutate(across(where(is.numeric) & matches(daymet_variables), ~ round(., 2)))
+
+# Splitting out number_year in daymet_data_long
+daymet_data_long <- daymet_data_long %>%
+  separate_wider_delim(number_year, delim = "_", names = c("number", "year"), cols_remove = TRUE)
+
+# Matching the Daymet day numbers to the dates they correspond to
+daymet_data_long <- daymet_data_long %>%
+  mutate(number = as.integer(number),
+         year = as.integer(year))
+daymet_data_long <- as.data.table(daymet_data_long)
+time_dictionary <- time_dictionary[, number := as.integer(number)]
+time_dictionary <- time_dictionary[, year := as.integer(year)]
+daymet_data_long <- daymet_data_long[time_dictionary, on = c(number = "number", year = "year")]
+daymet_data_long <- daymet_data_long[, c("number", "year") := NULL]
+
+# Linking the Daymet data cells to the input address coordinate cells across all event dates
+main_dataset <- daymet_data_long[addresses, on = c(cell = "cell", date = "date")]
+main_dataset <- main_dataset[, "cell" := NULL]
+setcolorder(main_dataset, c("id", "date"))
 
 # Merging in the extra columns
 extra_columns_df <- as.data.table(extra_columns_df)
@@ -532,6 +508,10 @@ main_dataset <- extra_columns_df[main_dataset, on = c(id = "id")]
 # Merging in the user-supplied ID column
 id_column_df <- as.data.table(id_column_df)
 main_dataset <- id_column_df[main_dataset, on = c(id = "id")]
+
+# Removing any rows with NA
+main_dataset <- main_dataset %>%
+  na.omit()
 
 # Sorting and de-duplicating the final results (duplicates could have resulted from leap years or repeat event dates)
 if (!is.na(id_column)) {
