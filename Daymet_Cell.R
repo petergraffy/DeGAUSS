@@ -22,7 +22,7 @@ set_options <- function(csv_filename, year_start, year_end, daymet_variables, la
 # Specifying user-customized options
 #### DO NOT CHANGE ANYTHING BEFORE THIS ####
 set_options_out <- set_options(csv_filename = "loyalty_geocoded.csv",
-                               year_start = 2016,
+                               year_start = 2010,
                                year_end = 2022,
                                daymet_variables = "tmax,tmin",
                                lag = 3,
@@ -45,6 +45,7 @@ max_lat <- set_options_out$max_lat
 region <- set_options_out$region
 id_column <- set_options_out$id_column
 extra_columns <- set_options_out$extra_columns
+rm(set_options_out)
 
 # Daymet weather variables include daily minimum and maximum temperature, precipitation,
 # vapor pressure, shortwave radiation, snow water equivalent, and day length produced on
@@ -368,11 +369,13 @@ extra_columns_df <- import_data_out$extra_columns_df
 addresses <- import_data_out$addresses
 event_dates <- import_data_out$event_dates
 coords <- import_data_out$coords
+rm(import_data_out)
 
 # Downloading and loading the Daymet NetCDF data
 daymet_download_load_out <- daymet_download_load()
 time_dictionary <- daymet_download_load_out$time_dictionary
 daymet_data <- daymet_download_load_out$daymet_data
+rm(daymet_download_load_out)
 
 # Setting up parallel processing and progress bar reporting
 plan(multisession)
@@ -382,10 +385,12 @@ handlers("cli")
 # Changing the coordinate reference system of the input addresses so they match that of Daymet
 new_crs <- crs(daymet_data, proj = TRUE)
 proj_coords <- project(coords, new_crs)
+rm(coords)
 
 # Finding the Daymet raster cell numbers that match the input address coordinates
 addresses <- addresses %>%
   mutate(cell = unname(cells(daymet_data, proj_coords)[, "cell"]))
+rm(proj_coords)
 
 # Removing any input address observations where the Daymet cell raster number is missing
 addresses <- addresses %>%
@@ -431,6 +436,7 @@ if (lag > 0) {
     select(-event_date_list) %>%
     rename(event_date_list = event_date_list_lag)
 }
+rm(new_dates)
 
 # Sorting each event date list, and removing duplicates
 event_dates$event_date_list <- future_map(event_dates$event_date_list, sort)
@@ -447,6 +453,7 @@ addresses <- addresses %>%
 event_dates <- as.data.table(event_dates)
 addresses <- as.data.table(addresses)
 addresses <- addresses[event_dates, on = c(id = "id")]
+rm(event_dates)
 
 # Taking care of leap years, per Daymet conventions (12/31 is switched to 12/30)
 addresses$date <- if_else(leap_year(addresses$date) & month(addresses$date) == 12 & day(addresses$date) == 31,
@@ -456,6 +463,7 @@ addresses$date <- if_else(leap_year(addresses$date) & month(addresses$date) == 1
 # Converting the Daymet SpatRaster raster stack to a data table, with cell numbers
 daymet_data_dt <- as.data.frame(daymet_data, cells = TRUE)
 daymet_data_dt <- as.data.table(daymet_data_dt)
+rm(daymet_data)
 
 # Transposing the Daymet data table, one Daymet variable at a time
 transpose_daymet <- function(.daymet_data_dt = daymet_data_dt, dm_var) {
@@ -473,14 +481,15 @@ for (i in 1:length(daymet_variables)) {
     daymet_data_long <- transpose_daymet(dm_var = daymet_variables[i])
   }
   else {
-    daymet_data_long_merge <- transpose_daymet(dm_var = daymet_variables[i])
-    daymet_data_long <- daymet_data_long[daymet_data_long_merge, on = c(cell = "cell", number_year = "number_year")]
+    daymet_data_long <- daymet_data_long[transpose_daymet(dm_var = daymet_variables[i]), on = c(cell = "cell", number_year = "number_year")]
   }
 }
+rm(daymet_data_dt)
 
 # Rounding the Daymet variables to two decimal places
 daymet_data_long <- daymet_data_long %>%
   mutate(across(where(is.numeric) & matches(daymet_variables), ~ round(., 2)))
+rm(daymet_variables)
 
 # Splitting out number_year in daymet_data_long
 daymet_data_long <- daymet_data_long %>%
@@ -495,19 +504,23 @@ time_dictionary <- time_dictionary[, number := as.integer(number)]
 time_dictionary <- time_dictionary[, year := as.integer(year)]
 daymet_data_long <- daymet_data_long[time_dictionary, on = c(number = "number", year = "year")]
 daymet_data_long <- daymet_data_long[, c("number", "year") := NULL]
+rm(time_dictionary)
 
 # Linking the Daymet data cells to the input address coordinate cells across all event dates
 main_dataset <- daymet_data_long[addresses, on = c(cell = "cell", date = "date")]
 main_dataset <- main_dataset[, "cell" := NULL]
 setcolorder(main_dataset, c("id", "date"))
+rm(daymet_data_long, addresses)
 
 # Merging in the extra columns
 extra_columns_df <- as.data.table(extra_columns_df)
 main_dataset <- extra_columns_df[main_dataset, on = c(id = "id")]
+rm(extra_columns_df)
 
 # Merging in the user-supplied ID column
 id_column_df <- as.data.table(id_column_df)
 main_dataset <- id_column_df[main_dataset, on = c(id = "id")]
+rm(id_column_df)
 
 # Removing any rows with NA
 main_dataset <- main_dataset %>%
