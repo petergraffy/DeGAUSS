@@ -22,10 +22,10 @@ set_options <- function(csv_filename, year_start, year_end, daymet_variables, la
 # Specifying user-customized options
 #### DO NOT CHANGE ANYTHING BEFORE THIS ####
 set_options_out <- set_options(csv_filename = "loyalty_geocoded.csv",
-                               year_start = 2010,
+                               year_start = 2016,
                                year_end = 2022,
                                daymet_variables = "tmax,tmin",
-                               lag = 3,
+                               lag = 7,
                                min_lon = -88.263390,
                                max_lon = -87.525706,
                                min_lat = 41.470117,
