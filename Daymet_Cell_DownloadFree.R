@@ -260,44 +260,8 @@ import_data <- function(.csv_filename = csv_filename, .min_lon = min_lon, .max_l
 
 # Creating function to load the Daymet NetCDF data
 daymet_load <- function() {
-  # If the Daymet data bounding box was not supplied by the user, then inferring the bounding box from the input address coordinates
-  if (.min_lon == 0 & .max_lon == 0 & .min_lat == 0 & .max_lat == 0) {
-    # Finding the min and max longitude and latitude out of all the input address coordinates
-    .min_lon <- min(addresses$lon)
-    .max_lon <- max(addresses$lon)
-    .min_lat <- min(addresses$lat)
-    .max_lat <- max(addresses$lat)
-    # In order to preserve privacy, adding a random amount of noise to the bounding box of input addresses
-    # Each bounding box point (e.g., maximum latitude) will be extended by an additional 1-22 kilometers
-    noise <- runif(4, min = 0.01, max = 0.2)
-    .min_lon <- .min_lon - noise[1]
-    .max_lon <- .max_lon + noise[2]
-    .min_lat <- .min_lat - noise[3]
-    .max_lat <- .max_lat + noise[4]
-  }
-  # Downloading the Daymet NetCDF data defined by the coordinate bounding box: One file per variable per year
-  .daymet_variables <- str_remove(.daymet_variables, " ")
-  .daymet_variables <- str_split(.daymet_variables, ",", simplify = TRUE)
-  for (variable in .daymet_variables) {
-    for (year in .year_start:.year_end) {
-      download_daymet_ncss(location = c(.max_lat, .min_lon, .min_lat, .max_lon), # Bounding box defined as top left / bottom right pair c(lat, lon, lat, lon)
-                          start = year,
-                          end = year,
-                          param = variable,
-                          frequency = "daily",
-                          mosaic = .region,
-                          silent = FALSE,
-                          force = TRUE,
-                          path = getwd())
-      Sys.sleep(30) # Pausing download of Daymet data for 30 seconds to help avoid placing too many requests at once
-    }
-  }
   # Loading the NetCDF files downloaded from Daymet as a SpatRaster raster stack
   netcdf_list <- list.files(pattern = "_ncss.nc$")
-  # Checking for extra NetCDF files
-  if (length(netcdf_list) > (length(seq(.year_start, .year_end)) * length(.daymet_variables))) {
-    stop(call. = FALSE, 'Ensure that there are not extra NetCDF files in folder where Daymet data was downloaded to.')
-  }
   # Initializing a time dictionary
   time_dict <- tibble(number = 1:365)
   for (i in 1:length(netcdf_list)) {
@@ -315,23 +279,53 @@ daymet_load <- function() {
     time_dict <- time_dict %>%
       mutate(year = yr,
              date := as_date(number, origin = origin))
-    # Stacking the Daymet data rasters and time dictionary
+    # Stacking the Daymet data rasters and time dictionary, and tracking the year and Daymet variable
     if (i == 1) {
       daymet_data <- daymet_load
       time_dictionary <- time_dict
+      yr_list <- list(yr)
+      dm_var_list <- list(dm_var)
     } else {
       daymet_data <- c(daymet_data, daymet_load)
       time_dictionary <- rbind(time_dictionary, time_dict)
+      yr_list[[length(yr_list) + 1]] <- yr
+      dm_var_list[[length(dm_var_list) + 1]] <- dm_var
     }
   }
   time_dictionary <- time_dictionary %>%
     arrange(number, year) %>%
     distinct()
   time_dictionary <- as.data.table(time_dictionary)
+  # Extracting the year start and year end of the Daymet data that was loaded in
+  yr_list <- unique(yr_list)
+  year_start <- as.numeric(min(unlist(yr_list)))
+  year_end <- as.numeric(max(unlist(yr_list)))
+  # Extracting the Daymet variables of the Daymet data that was loaded in
+  dm_var_list <- unique(dm_var_list)
+  daymet_variables <- paste(unlist(dm_var_list), collapse = ",")
+  # Extracting the minimum and maximum longitude and latitude of the Daymet data that was loaded in
+  proj_daymet_data <- project(daymet_data, "+proj=longlat +ellips=WGS84")
+  min_lon <- unname(ext(proj_daymet_data)[1])
+  max_lon <- unname(ext(proj_daymet_data)[2])
+  min_lat <- unname(ext(proj_daymet_data)[3])
+  max_lat <- unname(ext(proj_daymet_data)[4])
   # Returning a list of objects needed later
-  out <- list("time_dictionary" = time_dictionary, "daymet_data" = daymet_data)
+  out <- list("time_dictionary" = time_dictionary, "daymet_data" = daymet_data, "year_start" = year_start, "year_end" = year_end, "daymet_variables" = daymet_variables, "min_lon" = min_lon, "max_lon" = max_lon, "min_lat" = min_lat, "max_lat" = max_lat)
   return(out)
 }
+
+# Loading the Daymet NetCDF data
+daymet_load_out <- daymet_load()
+time_dictionary <- daymet_load_out$time_dictionary
+daymet_data <- daymet_load_out$daymet_data
+year_start <- daymet_load_out$year_start
+year_end <- daymet_load_out$year_end
+daymet_variables <- daymet_load_out$daymet_variables
+min_lon <- daymet_load_out$min_lon
+max_lon <- daymet_load_out$max_lon
+min_lat <- daymet_load_out$min_lat
+max_lat <- daymet_load_out$max_lat
+rm(daymet_load_out)
 
 # Importing and processing the input data
 import_data_out <- import_data()
@@ -342,12 +336,6 @@ addresses <- import_data_out$addresses
 event_dates <- import_data_out$event_dates
 coords <- import_data_out$coords
 rm(import_data_out)
-
-# Loading the Daymet NetCDF data
-daymet_load_out <- daymet_load()
-time_dictionary <- daymet_load_out$time_dictionary
-daymet_data <- daymet_load_out$daymet_data
-rm(daymet_load_out)
 
 # Setting up parallel processing and progress bar reporting
 plan(multisession)
@@ -516,7 +504,7 @@ main_dataset <- main_dataset %>%
 # Writing the results out as a CSV file
 csv_out <- paste0(unlist(str_split(csv_filename, ".csv"))[1], "_daymet", ".csv")
 fwrite(main_dataset, csv_out, na = "", row.names = FALSE)
-
-# Deleting the NetCDF files that were downloaded from disk
 rm(list = ls(all.names = TRUE))
-unlink(list.files(pattern = "_ncss.nc$"), force = TRUE)
+
+# [Optional - Uncomment to run] Deleting the NetCDF files from disk
+#unlink(list.files(pattern = "_ncss.nc$"), force = TRUE)
