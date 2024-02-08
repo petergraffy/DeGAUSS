@@ -1,47 +1,24 @@
 # Creating function to specify user-customized options
-set_options <- function(csv_filename, year_start, year_end, daymet_variables, lag, min_lon = 0, max_lon = 0, min_lat = 0, max_lat = 0, region = "na", id_column = NA, extra_columns = NA) {
+set_options <- function(csv_filename, lag, id_column = NA, extra_columns = NA) {
   # csv_filename: Input CSV file, containing columns of lat, lon, and optionally event dates, a user-supplied ID column, and/or extra columns.
-  # year_start: Start year of Daymet NetCDF data download.
-  # year_end: End year of Daymet NetCDF data download.
-  # daymet_variables: Comma-separated string of Daymet variables: "tmax,tmin,srad,vp,swe,prcp,dayl".
   # lag: Lag in days for Daymet data to be pulled (number of days prior to event dates - event dates will be included as well).
-  # min_lon: [Optional] Minimum longitude (in decimal degrees) of bounding box for Daymet data download. Default is to infer bounding box from address coordinates.
-  # max_lon: [Optional] Maximum longitude (in decimal degrees) of bounding box for Daymet data download. Default is to infer bounding box from address coordinates.
-  # min_lat: [Optional] Minimum latitude (in decimal degrees) of bounding box for Daymet data download. Default is to infer bounding box from address coordinates.
-  # max_lat: [Optional] Maximum latitude (in decimal degrees) of bounding box for Daymet data download. Default is to infer bounding box from address coordinates.
-  # region: [Optional] Daymet spatial region ("na" for continental North America, "hi" for Hawaii, or "pr" for Puerto Rico). Default is continental North America.
   # id_column: [Optional] Name (as string) of user-supplied ID column (cannot be named "id"). Useful for later merging Daymet data with another dataset by the user-supplied ID column. Can contain repeats. Default is no user-supplied ID column included. In this case, the ID variable assigned is the row number of the input data.
   # extra_columns: [Optional] Comma-separated string of column names for any extra columns in the dataset that are not lat, lon, event dates, or a user-supplied ID column. Extra columns cannot be named "id", and the column names cannot contain a comma. Default is no extra columns included.
   
   # Returning a list of objects needed later
-  out <- list("csv_filename" = csv_filename, "year_start" = year_start, "year_end" = year_end, "daymet_variables" = daymet_variables, "lag" = lag, "min_lon" = min_lon, "max_lon" = max_lon, "min_lat" = min_lat, "max_lat" = max_lat, "region" = region, "id_column" = id_column, "extra_columns" = extra_columns)
+  out <- list("csv_filename" = csv_filename, "lag" = lag, "id_column" = id_column, "extra_columns" = extra_columns)
   return(out)  
 }
 
 # Specifying user-customized options
 #### DO NOT CHANGE ANYTHING BEFORE THIS ####
 set_options_out <- set_options(csv_filename = "loyalty_geocoded.csv",
-                               year_start = 2016,
-                               year_end = 2022,
-                               daymet_variables = "tmax,tmin",
                                lag = 7,
-                               min_lon = -88.263390,
-                               max_lon = -87.525706,
-                               min_lat = 41.470117,
-                               max_lat = 42.154247,
                                id_column = "patid",
                                extra_columns = "enc_id,address_number")
 #### DO NOT CHANGE ANYTHING AFTER THIS ####
 csv_filename <- set_options_out$csv_filename
-year_start <- set_options_out$year_start
-year_end <- set_options_out$year_end
-daymet_variables <- set_options_out$daymet_variables
 lag <- set_options_out$lag
-min_lon <- set_options_out$min_lon
-max_lon <- set_options_out$max_lon
-min_lat <- set_options_out$min_lat
-max_lat <- set_options_out$max_lat
-region <- set_options_out$region
 id_column <- set_options_out$id_column
 extra_columns <- set_options_out$extra_columns
 rm(set_options_out)
@@ -58,7 +35,6 @@ rm(set_options_out)
 # and December 31 is discarded from leap years to maintain a 365-day year.
 
 #### IF YOU HAVEN'T PREVIOUSLY INSTALLED ANY OF THE PACKAGES BELOW, THEN UN-COMMENT AND RUN THE RELEVANT CODE LINES ####
-#install.packages('daymetr')
 #install.packages('tidyverse')
 #install.packages('terra')
 #install.packages('gtools')
@@ -70,7 +46,6 @@ rm(set_options_out)
 #remotes::install_github('degauss-org/dht')
 
 # Loading necessary packages
-library(daymetr)
 library(tidyverse)
 library(terra)
 library(gtools)
@@ -283,8 +258,8 @@ import_data <- function(.csv_filename = csv_filename, .min_lon = min_lon, .max_l
   return(out)
 }
 
-# Creating function to download and load the Daymet NetCDF data
-daymet_download_load <- function(.min_lon = min_lon, .max_lon = max_lon, .min_lat = min_lat, .max_lat = max_lat, .daymet_variables = daymet_variables, .year_start = year_start, .year_end = year_end, .region = region) {
+# Creating function to load the Daymet NetCDF data
+daymet_load <- function() {
   # If the Daymet data bounding box was not supplied by the user, then inferring the bounding box from the input address coordinates
   if (.min_lon == 0 & .max_lon == 0 & .min_lat == 0 & .max_lat == 0) {
     # Finding the min and max longitude and latitude out of all the input address coordinates
@@ -368,11 +343,11 @@ event_dates <- import_data_out$event_dates
 coords <- import_data_out$coords
 rm(import_data_out)
 
-# Downloading and loading the Daymet NetCDF data
-daymet_download_load_out <- daymet_download_load()
-time_dictionary <- daymet_download_load_out$time_dictionary
-daymet_data <- daymet_download_load_out$daymet_data
-rm(daymet_download_load_out)
+# Loading the Daymet NetCDF data
+daymet_load_out <- daymet_load()
+time_dictionary <- daymet_load_out$time_dictionary
+daymet_data <- daymet_load_out$daymet_data
+rm(daymet_load_out)
 
 # Setting up parallel processing and progress bar reporting
 plan(multisession)
