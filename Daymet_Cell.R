@@ -1,4 +1,3 @@
-tictoc::tic("Daymet") #### REMOVE AT THE END
 # Creating function to specify user-customized options
 set_options <- function(csv_filename, year_start, year_end, daymet_variables, lag, min_lon = 0, max_lon = 0, min_lat = 0, max_lat = 0, region = "na", id_column = NA, extra_columns = NA) {
   # csv_filename: Input CSV file, containing columns of lat, lon, and optionally event dates, a user-supplied ID column, and/or extra columns.
@@ -548,4 +547,3 @@ fwrite(main_dataset, csv_out, na = "", row.names = FALSE)
 # Deleting the NetCDF files that were downloaded from disk
 rm(list = ls(all.names = TRUE))
 unlink(list.files(pattern = "_ncss.nc$"), force = TRUE)
-tictoc::toc() #### REMOVE AT THE END
