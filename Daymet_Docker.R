@@ -30,16 +30,17 @@ doc <- '
       '
 opt <- docopt::docopt(doc)
 
-# handle if vars are missing or invalid: returns tmax and tmin
-
 if (is.null(opt$vars)) {
   opt$vars <- "tmax, tmin, srad, vp, swe, prcp, dayl"
   cli::cli_alert_warning("Blank argument for Daymet variable selection. Will return all Daymet variables. Please see {.url https://degauss.org/daymet/} for more information about the Daymet variable argument.")
 }
 
-if (! opt$vars %in% c("tmax", "tmin", "srad", "vp", "swe", "prcp", "dayl", "capricorn", "none")) {
-  opt$vars <- "tmax, tmin"
-  cli::cli_alert_warning("Invalid argument for Daymet variable selection. Will return tmax and tmin. Please see {.url https://degauss.org/daymet/} for more information about the Daymet variable argument.")
+day_var <- str_remove_all(opt$vars, " ") 
+day_var <- str_split(day_var, ",", simplify = TRUE)
+
+if (! all(day_var %in% c("tmax", "tmin", "srad", "vp", "swe", "prcp", "dayl", "capricorn", "none"))) {
+  opt$vars <- "tmax, tmin, srad, vp, swe, prcp, dayl"
+  cli::cli_alert_warning("Invalid argument for Daymet variable selection. Will return all Daymet variables. Please see {.url https://degauss.org/daymet/} for more information about the Daymet variable argument.")
 }
 
 if (is.null(opt$min_lon)) {
@@ -67,12 +68,10 @@ if (is.null(opt$region)) {
   cli::cli_alert_warning("Blank argument for region. Will use North America as default. Please see {.url https://degauss.org/daymet/} for more information about the Daymet variable argument.")
 }
 
-if (! opt$region %in% c("na", "hi")) {
+if (! opt$region %in% c("na", "hi", "pr")) {
   opt$region <- "na"
   cli::cli_alert_warning("Invalid argument for Daymet region. Will use North America as default. Please see {.url https://degauss.org/daymet/} for more information about the Daymet variable argument.")
 }
-
-# set default values for capricorn site queries
 
 if (opt$vars %in% c("capricorn")) {
     opt$vars <- "tmax, tmin"
@@ -245,7 +244,7 @@ daymet_download_load <- function(.min_lon = opt$min_lon, .max_lon = opt$max_lon,
     .max_lat <- .max_lat + noise[4]
   }
   # Downloading the Daymet NetCDF data defined by the coordinate bounding box: One file per variable per year
-  .daymet_variables <- str_remove(.daymet_variables, " ")
+  .daymet_variables <- str_remove_all(.daymet_variables, " ")
   .daymet_variables <- str_split(.daymet_variables, ",", simplify = TRUE)
   for (variable in .daymet_variables) {
     for (year in .year_start:.year_end) {
@@ -364,7 +363,7 @@ transpose_daymet <- function(.daymet_data_dt = daymet_data_dt, dm_var) {
   return(daymet_data_dt_var)
 }
 
-daymet_variables <- str_remove(opt$vars, " ")
+daymet_variables <- str_remove_all(opt$vars, " ")
 daymet_variables <- str_split(daymet_variables, ",", simplify = TRUE)
 for (i in 1:length(daymet_variables)) {
   if (i == 1) {
