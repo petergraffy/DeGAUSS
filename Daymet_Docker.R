@@ -33,11 +33,11 @@ opt <- docopt::docopt(doc)
 # handle if vars are missing or invalid: returns tmax and tmin
 
 if (is.null(opt$vars)) {
-  opt$vars <- "tmax, tmin"
-  cli::cli_alert_warning("Blank argument for Daymet variable selection. Will return tmax and tmin. Please see {.url https://degauss.org/daymet/} for more information about the Daymet variable argument.")
+  opt$vars <- "tmax, tmin, srad, vp, swe, prcp, dayl"
+  cli::cli_alert_warning("Blank argument for Daymet variable selection. Will return all Daymet variables. Please see {.url https://degauss.org/daymet/} for more information about the Daymet variable argument.")
 }
 
-if (! opt$vars %in% c("tmax", "tmin", "srad", "vp", "prcp", "dayl", "capricorn", "none")) {
+if (! opt$vars %in% c("tmax", "tmin", "srad", "vp", "swe", "prcp", "dayl", "capricorn", "none")) {
   opt$vars <- "tmax, tmin"
   cli::cli_alert_warning("Invalid argument for Daymet variable selection. Will return tmax and tmin. Please see {.url https://degauss.org/daymet/} for more information about the Daymet variable argument.")
 }
