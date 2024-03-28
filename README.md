@@ -16,3 +16,5 @@ Daymet_Cell_DeGAUSS.R = Program to link Daymet data to geocoded addresses via me
 Daymet_Cell_DownloadFree.R = Program to link Daymet data to geocoded addresses via merging on raster cell number, which pulls from pre-downloaded Daymet data (rather than downloading the Daymet data from the Daymet website).
 
 Daymet_Docker.R = Program to link Daymet data to geocoded addresses via merging on raster cell number, with code altered so that it is compatible with Docker containerization.
+
+Daymet_Docker_DownloadFree.R = Program to link Daymet data to geocoded addresses via merging on raster cell number, which pulls from pre-downloaded Daymet data (rather than downloading the Daymet data from the Daymet website), with code altered so that it is compatible with Docker containerization.
