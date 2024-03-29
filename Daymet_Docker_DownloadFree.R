@@ -15,24 +15,18 @@ withr::with_message_sink("/dev/null", library(dht))
 
 doc <- '
       Usage:
-      entrypoint.R <filename> <region>
+      entrypoint.R <filename>
       entrypoint.R (-h | --help)
 
       Options:
       -h --help   Show this screen
       filename  name of csv file
-      region  daymet region
       '
 opt <- docopt::docopt(doc)
 
-if (! opt$region %in% c("na", "hi", "pr")) {
-  opt$region <- "na"
-  cli::cli_alert_warning("Invalid argument for Daymet region. Will use North America as default. Please see {.url https://degauss.org/daymet/} for more information.")
-}
-
 # Writing functions
 # Creating function to import and process the input data
-import_data <- function(.csv_filename = opt$filename, .min_lon = min_lon, .max_lon = max_lon, .min_lat = min_lat, .max_lat = max_lat, .region = opt$region) {
+import_data <- function(.csv_filename = opt$filename, .min_lon = min_lon, .max_lon = max_lon, .min_lat = min_lat, .max_lat = max_lat, .year_start = year_start, .year_end = year_end) {
   # Checking that the input data is a CSV file
   if (!str_detect(.csv_filename, ".csv$")) {
     stop(call. = FALSE, 'Input file must be a CSV.')
@@ -111,28 +105,23 @@ import_data <- function(.csv_filename = opt$filename, .min_lon = min_lon, .max_l
     print(w)
     stop(call. = FALSE)
   })
-  # Filtering out any rows in the input data where the start_date is before 1980 if region is "na" or "hi", or before 1950 if region is "pr"
-  if (.region == "na" | .region == "hi") {
-    input_data <- input_data %>%
-      filter(!(start_date < as_date("1980-01-01")))
-  } else {
-    input_data <- input_data %>%
-      filter(!(start_date < as_date("1950-01-01")))
-  }
-  # Throwing an error if no observations are remaining
-  if (nrow(input_data) == 0) {
-    stop(call. = FALSE, 'Zero observations where the start_date is within or after the first year of available Daymet data.')
-  }
-  # Filtering out any rows in the input data where the end_date year is equal to the current date year
-  input_data <- input_data %>%
-    filter(!(year(end_date) == year(Sys.Date())))
-  # Throwing an error if no observations are remaining
-  if (nrow(input_data) == 0) {
-    stop(call. = FALSE, 'Zero observations where the end_date is within or before the last year of available Daymet data.')
-  }
   # Expanding the dates between start_date and end_date into a daily series
   input_data <- expand_dates(input_data, by = "day") %>%
-    select(-start_date, -end_date)
+    select(-start_date, -end_date)  
+  # Filtering out any rows in the input data where the date is before the first year of downloaded Daymet data
+  input_data <- input_data %>%
+    filter(!(year(date) < .year_start))
+  # Throwing an error if no observations are remaining
+  if (nrow(input_data) == 0) {
+    stop(call. = FALSE, 'Zero observations where the start_date is within or after the first year of downloaded Daymet data.')
+  }  
+  # Filtering out any rows in the input data where the date is after the last year of downloaded Daymet data
+  input_data <- input_data %>%
+    filter(!(year(date) > .year_end))
+  # Throwing an error if no observations are remaining
+  if (nrow(input_data) == 0) {
+    stop(call. = FALSE, 'Zero observations where the end_date is within or before the last year of downloaded Daymet data.')
+  }
   # Removing any columns in the input data where everything is NA
   input_data <- input_data %>%
     select_if(~ !all(is.na(.))) 
@@ -172,14 +161,16 @@ daymet_load <- function() {
     time_dict <- time_dict %>%
       mutate(year = yr,
              date := as_date(number, origin = origin))
-    # Stacking the Daymet data rasters and time dictionary, and tracking the Daymet variable
+    # Stacking the Daymet data rasters and time dictionary, and tracking the year and Daymet variable
     if (i == 1) {
       daymet_data <- daymet_load
       time_dictionary <- time_dict
+      yr_list <- list(yr)
       dm_var_list <- list(dm_var)
     } else {
       daymet_data <- c(daymet_data, daymet_load)
       time_dictionary <- rbind(time_dictionary, time_dict)
+      yr_list[[length(yr_list) + 1]] <- yr
       dm_var_list[[length(dm_var_list) + 1]] <- dm_var
     }
   }
@@ -187,6 +178,10 @@ daymet_load <- function() {
     arrange(number, year) %>%
     distinct()
   time_dictionary <- as.data.table(time_dictionary)
+  # Extracting the year start and year end of the Daymet data that was loaded in
+  yr_list <- unique(yr_list)
+  year_start <- as.numeric(min(unlist(yr_list)))
+  year_end <- as.numeric(max(unlist(yr_list)))
   # Extracting the Daymet variables of the Daymet data that was loaded in
   dm_var_list <- unique(dm_var_list)
   daymet_variables <- paste(unlist(dm_var_list), collapse = ",")
@@ -197,7 +192,7 @@ daymet_load <- function() {
   min_lat <- unname(ext(proj_daymet_data)[3])
   max_lat <- unname(ext(proj_daymet_data)[4])
   # Returning a list of objects needed later
-  out <- list("time_dictionary" = time_dictionary, "daymet_data" = daymet_data, "daymet_variables" = daymet_variables, "min_lon" = min_lon, "max_lon" = max_lon, "min_lat" = min_lat, "max_lat" = max_lat)
+  out <- list("time_dictionary" = time_dictionary, "daymet_data" = daymet_data, "year_start" = year_start, "year_end" = year_end, "daymet_variables" = daymet_variables, "min_lon" = min_lon, "max_lon" = max_lon, "min_lat" = min_lat, "max_lat" = max_lat)
   return(out)
 }
 
@@ -205,6 +200,8 @@ daymet_load <- function() {
 daymet_load_out <- daymet_load()
 time_dictionary <- daymet_load_out$time_dictionary
 daymet_data <- daymet_load_out$daymet_data
+year_start <- daymet_load_out$year_start
+year_end <- daymet_load_out$year_end
 daymet_variables <- daymet_load_out$daymet_variables
 min_lon <- daymet_load_out$min_lon
 max_lon <- daymet_load_out$max_lon
