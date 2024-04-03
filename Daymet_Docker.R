@@ -37,7 +37,6 @@ if (is.null(opt$vars)) {
 
 day_var <- str_remove_all(opt$vars, " ") 
 day_var <- str_split(day_var, ",", simplify = TRUE)
-
 if (! all(day_var %in% c("tmax", "tmin", "srad", "vp", "swe", "prcp", "dayl", "capricorn"))) {
   opt$vars <- "tmax, tmin, srad, vp, swe, prcp, dayl"
   cli::cli_alert_warning("Invalid argument for Daymet variable selection. Will return all Daymet variables. Please see {.url https://degauss.org/daymet/} for more information.")
@@ -183,9 +182,6 @@ import_data <- function(.csv_filename = opt$filename, .min_lon = opt$min_lon, .m
     print(w)
     stop(call. = FALSE)
   })
-  # Inferring the start and end year of Daymet data to download from start_date and end_date
-  year_start <- year(min(input_data$start_date))
-  year_end <- year(max(input_data$end_date))
   # Expanding the dates between start_date and end_date into a daily series
   input_data <- expand_dates(input_data, by = "day") %>%
     select(-start_date, -end_date)
@@ -200,7 +196,7 @@ import_data <- function(.csv_filename = opt$filename, .min_lon = opt$min_lon, .m
   # Throwing an error if no observations are remaining
   if (nrow(input_data) == 0) {
     stop(call. = FALSE, 'Zero observations where the start_date is within or after the first year of available Daymet data.')
-  }
+  }  
   # Filtering out any rows in the input data where the date year is equal to the current date year
   input_data <- input_data %>%
     filter(!(year(date) == year(Sys.Date())))
@@ -208,6 +204,9 @@ import_data <- function(.csv_filename = opt$filename, .min_lon = opt$min_lon, .m
   if (nrow(input_data) == 0) {
     stop(call. = FALSE, 'Zero observations where the end_date is within or before the last year of available Daymet data.')
   }
+  # Inferring the start and end year of Daymet data to download from date
+  year_start <- year(min(input_data$date))
+  year_end <- year(max(input_data$date))
   # Removing any columns in the input data where everything is NA
   input_data <- input_data %>%
     select_if(~ !all(is.na(.))) 
