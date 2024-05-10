@@ -66,7 +66,7 @@ import_data <- function(.csv_filename = csv_filename, .min_lon = min_lon, .max_l
     stop(call. = FALSE, 'Input file must be a CSV.')
   }
   # Reading in the input data
-  input_data <- fread(.csv_filename, header = TRUE, sep = ",")
+  input_data <- fread(.csv_filename, header = TRUE, sep = ",", colClasses = c(start_date = "character", end_date = "character"))
   input_data <- as_tibble(input_data)
   # Creating an ID variable in the input data that is just the row number
   if ("id" %in% colnames(input_data)) {
